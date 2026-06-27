@@ -1,9 +1,9 @@
 {
-  "projectId": "jaunty-centaur-5xhgq",
-  "appId": "1:428332944032:web:7b8f831bd40145b0a8d7c5",
-  "apiKey": "AIzaSyBDxFfApbNMFtZoepY7lfUZDQP5I-RIGt4",
-  "authDomain": "jaunty-centaur-5xhgq.firebaseapp.com",
-  "storageBucket": "jaunty-centaur-5xhgq.firebasestorage.app",
-  "messagingSenderId": "428332944032",
-  "measurementId": ""
+  apiKey: "AIzaSyC_Ts6rNl9W37Mkoc6DscUH9Yeyh_ksUB4",
+  authDomain: "tn1-azota.firebaseapp.com",
+  projectId: "tn1-azota",
+  storageBucket: "tn1-azota.firebasestorage.app",
+  messagingSenderId: "497385022307",
+  appId: "1:497385022307:web:743e0a6327c5045da7a956",
+  measurementId: "G-G9GNZKDC7W"
 }
