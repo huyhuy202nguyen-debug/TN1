@@ -1,0 +1,6 @@
+{
+  "name": "Quiz Builder and Question Bank",
+  "description": "Tạo bài thi trắc nghiệm mạnh mẽ, nhận diện đề thi tự động qua Word/Text như Azota, quản lý ngân hàng câu hỏi đa dạng và đồng bộ với Google Sheets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
