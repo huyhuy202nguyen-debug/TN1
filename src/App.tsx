@@ -57,35 +57,35 @@ export default function App() {
   const [syncResultError, setSyncResultError] = useState<string | null>(null);
   const [deleteQuizId, setDeleteQuizId] = useState<string | null>(null);
   const [globalNotification, setGlobalNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  const [shareCodeModal, setShareCodeModal] = useState<{isOpen: boolean, code: string, url: string} | null>(null);
 
   // 1. Initial State Loading from localStorage
   useEffect(() => {
-    // Check for shared quiz in URL
+    // Check for shared quiz in URL via short ID
     const params = new URLSearchParams(window.location.search);
-    const sharedQuizData = params.get("quizData");
-    if (sharedQuizData) {
-      try {
-        let decodedQuiz;
-        // Check if it's the old btoa encoding or new lz-string encoding
-        if (sharedQuizData.startsWith("ey")) { // likely base64 JSON
-          decodedQuiz = JSON.parse(decodeURIComponent(escape(atob(sharedQuizData))));
-        } else {
-          // new lz-string encoding
-          const decompressed = LZString.decompressFromEncodedURIComponent(sharedQuizData);
-          if (decompressed) {
-            decodedQuiz = JSON.parse(decompressed);
+    const sharedId = params.get("q");
+    if (sharedId) {
+      setIsLoading(true);
+      fetch(`/api/get-shared-quiz/${sharedId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.quiz) {
+            setActiveQuiz(data.quiz);
+            setActiveTab("runner");
+            setIsStudentMode(true);
+          } else {
+            console.error("Failed to load shared quiz:", data.error);
+            setGlobalNotification({ message: data.error || "Bài thi không tồn tại hoặc đã hết hạn", type: "error" });
           }
-        }
-        
-        if (decodedQuiz && decodedQuiz.id) {
-          setActiveQuiz(decodedQuiz);
-          setActiveTab("runner");
-          setIsStudentMode(true);
-          return; // Skip loading other data if in student mode
-        }
-      } catch (err) {
-        console.error("Failed to parse shared quiz from URL:", err);
-      }
+        })
+        .catch(err => {
+          console.error("Error fetching shared quiz:", err);
+          setGlobalNotification({ message: "Lỗi kết nối khi tải bài thi.", type: "error" });
+        })
+        .finally(() => {
+          setIsLoading(false);
+        });
+      return; // Skip loading teacher auth data if in student mode
     }
 
     const cachedId = localStorage.getItem("quiz_spreadsheet_id");
@@ -361,39 +361,92 @@ export default function App() {
     setActiveQuiz(null);
 
     // Sync Submission Result to Google Sheets
-    const token = getAccessToken();
-    if (token && spreadsheetId) {
-      setIsSyncingResult(true);
-      setSyncResultError(null);
-      try {
-        await appendResultToSheet(token, spreadsheetId, newResult);
-      } catch (err: any) {
-        console.error("Syncing submission to Sheets failed:", err);
-        setSyncResultError(err.message || "Không thể đồng bộ kết quả thi lên Google Sheets.");
-      } finally {
-        setIsSyncingResult(false);
+    setIsSyncingResult(true);
+    setSyncResultError(null);
+    
+    try {
+      if (isStudentMode) {
+        // If we are a student, we don't have the teacher's credentials.
+        // We rely on the backend proxying the submission to the teacher's sheet.
+        const params = new URLSearchParams(window.location.search);
+        const sharedId = params.get("q");
+        if (sharedId) {
+          const response = await fetch(`/api/submit-quiz/${sharedId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ result: newResult })
+          });
+          const data = await response.json();
+          if (!response.ok || !data.success) {
+            throw new Error(data.error || "Không thể đồng bộ kết quả thi qua máy chủ.");
+          }
+        }
+      } else {
+        // Teacher testing the quiz themselves locally
+        const token = getAccessToken();
+        if (token && spreadsheetId) {
+          await appendResultToSheet(token, spreadsheetId, newResult);
+        }
       }
+    } catch (err: any) {
+      console.error("Syncing submission to Sheets failed:", err);
+      setSyncResultError(err.message || "Không thể đồng bộ kết quả thi lên Google Sheets.");
+    } finally {
+      setIsSyncingResult(false);
     }
   };
 
-  const handleShareQuiz = (quiz: Quiz) => {
+  const handleStudentJoin = () => {
+    const code = prompt("Nhập mã bài thi (6 ký tự):");
+    if (!code) return;
+    
+    setIsLoading(true);
+    fetch(`/api/get-shared-quiz/${code.toUpperCase()}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.quiz) {
+          setActiveQuiz(data.quiz);
+          setActiveTab("runner");
+          setIsStudentMode(true);
+        } else {
+          setGlobalNotification({ message: data.error || "Mã bài thi không hợp lệ hoặc đã hết hạn.", type: "error" });
+        }
+      })
+      .catch(err => {
+         setGlobalNotification({ message: "Lỗi kết nối.", type: "error" });
+      })
+      .finally(() => setIsLoading(false));
+  };
+
+  const handleShareQuiz = async (quiz: Quiz) => {
     try {
-      const quizData = LZString.compressToEncodedURIComponent(JSON.stringify(quiz));
-      const shareUrl = `${window.location.origin}${window.location.pathname}?quizData=${quizData}`;
-      
-      navigator.clipboard.writeText(shareUrl).then(() => {
-        setGlobalNotification({
-          message: "Đã sao chép link bài thi! Học sinh có thể truy cập link này để làm bài.",
-          type: "success"
-        });
-      }).catch(() => {
-        // Fallback for some browsers
-        prompt("Copy link bài thi này gửi cho học sinh:", shareUrl);
+      const accessToken = getAccessToken();
+      const response = await fetch("/api/share-quiz", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          quiz,
+          accessToken, // This will be null if they aren't logged in, which means results won't sync
+          spreadsheetId
+        })
       });
-    } catch (err) {
+      
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.error);
+      }
+
+      const shareUrl = `${window.location.origin}${window.location.pathname}?q=${data.shortId}`;
+      
+      setShareCodeModal({
+        isOpen: true,
+        code: data.shortId,
+        url: shareUrl
+      });
+    } catch (err: any) {
       console.error("Failed to generate share link", err);
       setGlobalNotification({
-        message: "Có lỗi khi tạo link chia sẻ, đề thi có thể quá lớn.",
+        message: "Có lỗi khi tạo link chia sẻ: " + (err.message || "Lỗi không xác định."),
         type: "error"
       });
     }
@@ -535,7 +588,13 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="flex gap-2 w-full md:w-auto shrink-0">
+              <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto shrink-0">
+                <button
+                  onClick={handleStudentJoin}
+                  className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-colors cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" /> Học sinh: Nhập mã thi
+                </button>
                 <button
                   onClick={() => setActiveTab("builder")}
                   className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-colors cursor-pointer"
@@ -690,9 +749,12 @@ export default function App() {
             isSyncing={isSyncingResult}
             syncError={syncResultError}
             spreadsheetId={spreadsheetId}
+            isStudentMode={isStudentMode}
             onBackToHome={() => {
               setLastResult(null);
               setActiveTab("dashboard");
+              setIsStudentMode(false);
+              window.history.replaceState({}, document.title, window.location.pathname);
             }}
           />
         )}
@@ -737,6 +799,41 @@ export default function App() {
                 className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl transition-all shadow-sm cursor-pointer text-center"
               >
                 Đồng ý xóa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Code Modal */}
+      {shareCodeModal && (
+        <div className="fixed inset-0 z-[105] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" id="share-code-modal">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-100 space-y-4">
+            <h3 className="text-xl font-bold text-slate-900 text-center">Chia sẻ bài thi</h3>
+            <p className="text-sm text-slate-600 text-center">
+              Để học sinh có thể truy cập và làm bài thi này, hãy gửi cho họ mã bài thi dưới đây.
+            </p>
+            
+            <div className="bg-slate-50 p-6 border border-slate-200 rounded-xl flex flex-col items-center justify-center gap-2">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Mã Bài Thi</span>
+              <span className="text-5xl font-black text-indigo-600 tracking-[0.2em]">{shareCodeModal.code}</span>
+            </div>
+
+            <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl text-sm text-indigo-800 space-y-2">
+              <p><strong>Lưu ý quan trọng:</strong></p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li>Bảo đảm bạn đã đăng nhập và đồng bộ Google Sheets, kết quả thi sẽ tự động đổ về sheet của bạn.</li>
+                <li>Bạn có thể copy URL của ứng dụng ở trên thanh địa chỉ, và nhắc học sinh chọn nút <strong>Học sinh: Nhập mã thi</strong>.</li>
+              </ul>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShareCodeModal(null)}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm cursor-pointer"
+              >
+                Đóng
               </button>
             </div>
           </div>

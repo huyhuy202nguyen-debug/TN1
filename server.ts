@@ -9,15 +9,17 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Set up support for large JSON payloads (e.g., parsing large text or word files)
+// Set up support for large JSON payloads
 app.use(express.json({ limit: "15mb" }));
 
-// Initialize Google GenAI client lazily or immediately.
-// We handle missing key gracefully by checking in the route.
+// In-memory storage for shared quizzes (Note: Ephemeral, lost on server restart)
+const sharedQuizzes = new Map<string, any>();
+
+// Initialize Google GenAI client lazily
 const getGenAI = (): GoogleGenAI => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY environment variable is required. Please set it in AI Studio Secrets.");
+    throw new Error("GEMINI_API_KEY environment variable is required.");
   }
   return new GoogleGenAI({ apiKey });
 };
@@ -171,6 +173,100 @@ Yêu cầu đề thi:
   } catch (error: any) {
     console.error("Error generating questions via Gemini:", error);
     res.status(500).json({ error: error.message || "Không thể tự động sinh câu hỏi." });
+  }
+});
+
+// 3. API: Create a shared quiz link (stores quiz + teacher's token in memory)
+app.post("/api/share-quiz", (req, res) => {
+  const { quiz, accessToken, spreadsheetId } = req.body;
+  if (!quiz) {
+    return res.status(400).json({ error: "Thiếu thông tin bài thi." });
+  }
+  
+  // Generate a random 6-character short ID (uppercase)
+  const shortId = Math.random().toString(36).substring(2, 8).toUpperCase();
+  
+  // Store it in memory
+  sharedQuizzes.set(shortId, {
+    quiz,
+    accessToken,
+    spreadsheetId,
+    createdAt: Date.now()
+  });
+  
+  res.json({ success: true, shortId });
+});
+
+// 4. API: Retrieve a shared quiz by short ID
+app.get("/api/get-shared-quiz/:id", (req, res) => {
+  const data = sharedQuizzes.get(req.params.id.toUpperCase());
+  if (!data) {
+    return res.status(404).json({ error: "Không tìm thấy bài thi hoặc bài thi đã hết hạn." });
+  }
+  
+  // We only send the quiz data back to the student, NEVER the accessToken!
+  res.json({ success: true, quiz: data.quiz });
+});
+
+// 5. API: Submit a quiz result directly to the teacher's Google Sheet
+app.post("/api/submit-quiz/:id", async (req, res) => {
+  const data = sharedQuizzes.get(req.params.id.toUpperCase());
+  if (!data) {
+    return res.status(404).json({ error: "Không tìm thấy phiên làm bài (hoặc đã hết hạn)." });
+  }
+  
+  const { result } = req.body;
+  const { accessToken, spreadsheetId } = data;
+  
+  if (!accessToken || !spreadsheetId) {
+    return res.status(400).json({ error: "Bài thi này không được liên kết với Google Sheets của giáo viên." });
+  }
+
+  // We write to the teacher's sheet using the teacher's cached access token
+  try {
+    const RESULT_SHEET = "Kết quả thi";
+    
+    // Construct the row summary
+    const detailSummary = result.detailedGrades
+      .map((g: any, idx: number) => {
+        const status = g.isCorrect ? "Đúng" : "Sai";
+        return `${idx + 1}. [${status}] Đã chọn: ${g.studentAnswers.join(", ")} | Đáp án đúng: ${g.correctAnswers.join(", ")}`;
+      })
+      .join("\n");
+
+    const row = [
+      result.submittedAt,
+      result.studentName,
+      result.quizTitle,
+      result.score.toFixed(1),
+      result.correctCount,
+      result.totalQuestions,
+      detailSummary,
+    ];
+
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:G")}:append?valueInputOption=USER_ENTERED`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          values: [row],
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+    }
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("Error submitting result to sheets:", error);
+    res.status(500).json({ error: error.message || "Lỗi khi lưu kết quả." });
   }
 });
 

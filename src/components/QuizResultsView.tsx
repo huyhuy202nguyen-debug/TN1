@@ -7,6 +7,7 @@ interface QuizResultsViewProps {
   isSyncing: boolean;
   syncError: string | null;
   spreadsheetId: string | null;
+  isStudentMode?: boolean;
   onBackToHome: () => void;
 }
 
@@ -15,6 +16,7 @@ export default function QuizResultsView({
   isSyncing,
   syncError,
   spreadsheetId,
+  isStudentMode = false,
   onBackToHome,
 }: QuizResultsViewProps) {
   const getScoreColor = (score: number) => {
@@ -71,7 +73,21 @@ export default function QuizResultsView({
 
         {/* Sheets Sync Status Badge */}
         <div className="pt-2">
-          {spreadsheetId ? (
+          {isStudentMode ? (
+            isSyncing ? (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 border border-indigo-100 rounded-xl text-xs text-indigo-700 font-medium">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang gửi kết quả về máy chủ...
+              </div>
+            ) : syncError ? (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 font-medium">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Gửi kết quả thất bại: {syncError}
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-100 rounded-xl text-xs text-emerald-700 font-medium">
+                <CheckCircle className="w-3.5 h-3.5 shrink-0" /> Kết quả thi đã được gửi cho giáo viên thành công!
+              </div>
+            )
+          ) : spreadsheetId ? (
             isSyncing ? (
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 border border-indigo-100 rounded-xl text-xs text-indigo-700 font-medium">
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang đồng bộ kết quả thi lên Google Sheets...
