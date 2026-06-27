@@ -1,9 +1,9 @@
-const firebaseConfig = {
-  apiKey: "AIzaSyC_Ts6rNl9W37Mkoc6DscUH9Yeyh_ksUB4",
-  authDomain: "tn1-azota.firebaseapp.com",
-  projectId: "tn1-azota",
-  storageBucket: "tn1-azota.firebasestorage.app",
-  messagingSenderId: "497385022307",
-  appId: "1:497385022307:web:743e0a6327c5045da7a956",
-  measurementId: "G-G9GNZKDC7W"
-};
+{
+  "projectId": "tn1-azota",
+  "appId": "1:497385022307:web:743e0a6327c5045da7a956",
+  "apiKey": "AIzaSyBDxFfApbNMFtZoepY7lfUZDQP5I-RIGt4",
+  "authDomain": "tn1-azota.firebaseapp.com",
+  "storageBucket": "tn1-azota.firebasestorage.app",
+  "messagingSenderId": "497385022307",
+  "measurementId": "G-G9GNZKDC7W"
+}
