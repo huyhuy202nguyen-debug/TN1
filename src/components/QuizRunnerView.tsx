@@ -1,17 +1,27 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Quiz, AnswerSubmission } from "../types";
-import { Clock, User, Award, HelpCircle, ArrowRight, Play, CheckCircle, AlertTriangle } from "lucide-react";
+import { Quiz, AnswerSubmission, Question } from "../types";
+import { Clock, User, Award, HelpCircle, ArrowRight, Play, CheckCircle, AlertTriangle, X } from "lucide-react";
+import { LatexRenderer } from "./LatexRenderer";
 
 interface QuizRunnerViewProps {
   quiz: Quiz;
-  onSubmitQuiz: (studentName: string, submissions: AnswerSubmission[]) => void;
+  onSubmitQuiz: (studentName: string, studentClass: string, submissions: AnswerSubmission[], drawnQuestions?: Question[]) => void;
 }
 
 export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewProps) {
   const [studentName, setStudentName] = useState("");
+  const [studentClass, setStudentClass] = useState("");
+  const [dynamicInfo, setDynamicInfo] = useState<Record<string, string>>({});
+  const [passwordInput, setPasswordInput] = useState("");
+  
   const [isStarted, setIsStarted] = useState(false);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [nameError, setNameError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
+
+  // Randomize questions if configured
+  const [examQuestions, setExamQuestions] = useState(quiz.questions);
 
   // Active exam state
   const [currentAnswers, setCurrentAnswers] = useState<Record<string, string[]>>({});
@@ -21,6 +31,9 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
   const [activeQuestionIdx, setActiveQuestionIdx] = useState(0);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Proctoring state
+  const [violations, setViolations] = useState(0);
 
   // Start the timer when the exam begins
   useEffect(() => {
@@ -37,17 +50,126 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
         });
       }, 1000);
     }
+    
+    // Proctoring setup
+    const handleVisibilityChange = () => {
+      if (document.hidden && isStarted && quiz.proctoringMode === "monitor_screen_exit") {
+        setViolations(v => v + 1);
+        alert("Cảnh báo: Bạn đã thoát khỏi màn hình làm bài!");
+      }
+    };
+    
+    if (quiz.proctoringMode === "monitor_screen_exit") {
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+    }
+
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (quiz.proctoringMode === "monitor_screen_exit") {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+      }
     };
   }, [isStarted]);
 
   const handleStartExam = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!studentName.trim()) {
+    
+    if (quiz.password && passwordInput !== quiz.password) {
+      setPasswordError("Mật khẩu không chính xác.");
+      return;
+    }
+    
+    if (quiz.requireStudentInfo && quiz.studentInfoFields) {
+      let missingField = false;
+      quiz.studentInfoFields.forEach(field => {
+        const val = dynamicInfo[field.id];
+        if (!val || !val.trim()) {
+          missingField = true;
+        }
+      });
+      if (missingField) {
+        setNameError("Vui lòng điền đầy đủ các thông tin yêu cầu.");
+        return;
+      }
+    } else if (!studentName.trim()) {
       setNameError("Vui lòng nhập Họ và Tên của bạn để bắt đầu làm bài.");
       return;
     }
+    
+    // Extract studentName if it was collected in dynamic info (heuristically)
+    let finalStudentName = studentName;
+    if (quiz.requireStudentInfo && quiz.studentInfoFields && quiz.studentInfoFields.length > 0) {
+      const nameField = quiz.studentInfoFields.find(f => f.label.toLowerCase().includes("tên") || f.label.toLowerCase().includes("name"));
+      if (nameField) {
+        finalStudentName = dynamicInfo[nameField.id];
+      } else {
+        // Fallback to the first collected field
+        finalStudentName = dynamicInfo[quiz.studentInfoFields[0].id] || "Không xác định";
+      }
+    }
+    setStudentName(finalStudentName);
+    
+    // Prepare randomized questions if configured
+    let preparedQuestions = quiz.questions;
+    
+    if (quiz.isRandomized) {
+      const shuffled = [...preparedQuestions].sort(() => Math.random() - 0.5);
+      preparedQuestions = shuffled.slice(0, quiz.randomQuestionCount || 10);
+    }
+    
+    if (quiz.groupByType) {
+      const getPriority = (q: Question) => {
+        if (q.questionType === "single") return 1;
+        if (q.questionType === "multiple") return 2;
+        if (q.questionType === "true_false" || q.questionType === "true_false_cluster") return 3;
+        if (q.questionType === "short_answer") return 4;
+        return 5;
+      };
+
+      // Group questions
+      const groups: Record<number, Question[]> = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+      preparedQuestions.forEach((q) => {
+        const priority = getPriority(q);
+        groups[priority].push(q);
+      });
+
+      // Shuffle within each group if shuffleQuestions is active
+      if (quiz.shuffleQuestions) {
+        Object.keys(groups).forEach((key) => {
+          const priority = Number(key);
+          groups[priority] = [...groups[priority]].sort(() => Math.random() - 0.5);
+        });
+      }
+
+      preparedQuestions = [
+        ...groups[1],
+        ...groups[2],
+        ...groups[3],
+        ...groups[4],
+        ...groups[5],
+      ];
+    } else {
+      // Shuffle the final list of questions if configured (and if not already randomized from bank)
+      if (quiz.shuffleQuestions && !quiz.isRandomized) {
+        preparedQuestions = [...preparedQuestions].sort(() => Math.random() - 0.5);
+      }
+    }
+    
+    // Shuffle answers within each question if configured
+    if (quiz.shuffleAnswers) {
+      preparedQuestions = preparedQuestions.map(q => {
+        if ((q.questionType === "single" || q.questionType === "multiple") && q.options) {
+          return {
+            ...q,
+            options: [...q.options].sort(() => Math.random() - 0.5)
+          };
+        }
+        return q;
+      });
+    }
+
+    setExamQuestions(preparedQuestions);
+    
     setIsStarted(true);
   };
 
@@ -92,27 +214,68 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
     });
   };
 
+  const constructStudentInfoString = () => {
+    if (quiz.requireStudentInfo && quiz.studentInfoFields) {
+      // Get all fields except the one we guessed is the name
+      const nameField = quiz.studentInfoFields.find(f => f.label.toLowerCase().includes("tên") || f.label.toLowerCase().includes("name"));
+      const otherFields = quiz.studentInfoFields.filter(f => f.id !== nameField?.id);
+      
+      const infoParts = otherFields.map(f => `${f.label}: ${dynamicInfo[f.id] || ""}`);
+      if (quiz.proctoringMode === "monitor_screen_exit" && violations > 0) {
+        infoParts.push(`Cảnh báo giám sát: ${violations} lần thoát màn hình`);
+      }
+      return infoParts.join(" | ");
+    }
+    
+    // Fallback if no dynamic info
+    const infoParts = [];
+    if (studentClass.trim()) {
+      infoParts.push(studentClass.trim());
+    }
+    if (quiz.proctoringMode === "monitor_screen_exit" && violations > 0) {
+      infoParts.push(`Cảnh báo giám sát: ${violations} lần thoát màn hình`);
+    }
+    return infoParts.join(" | ");
+  };
+
+  const compileSubmissions = (): AnswerSubmission[] => {
+    const compiledAnswers: AnswerSubmission[] = [];
+    examQuestions.forEach((q) => {
+      if (q.questionType === "case_study" && q.subQuestions) {
+        q.subQuestions.forEach((subQ) => {
+          const subAnsId = `${q.id}_${subQ.id}`;
+          compiledAnswers.push({
+            questionId: subAnsId,
+            selectedAnswers: currentAnswers[subAnsId] || [],
+          });
+        });
+        compiledAnswers.push({
+          questionId: q.id,
+          selectedAnswers: [],
+        });
+      } else {
+        compiledAnswers.push({
+          questionId: q.id,
+          selectedAnswers: currentAnswers[q.id] || [],
+        });
+      }
+    });
+    return compiledAnswers;
+  };
+
   const handleConfirmSubmit = () => {
     setShowSubmitConfirm(false);
     if (timerRef.current) clearInterval(timerRef.current);
 
-    // Compile into AnswerSubmission format
-    const compiledAnswers: AnswerSubmission[] = quiz.questions.map((q) => ({
-      questionId: q.id,
-      selectedAnswers: currentAnswers[q.id] || [],
-    }));
-
-    onSubmitQuiz(studentName.trim(), compiledAnswers);
+    const compiledAnswers = compileSubmissions();
+    onSubmitQuiz(studentName.trim(), constructStudentInfoString(), compiledAnswers, examQuestions);
   };
 
   const handleSubmit = (auto: boolean = false) => {
     if (auto) {
       if (timerRef.current) clearInterval(timerRef.current);
-      const compiledAnswers: AnswerSubmission[] = quiz.questions.map((q) => ({
-        questionId: q.id,
-        selectedAnswers: currentAnswers[q.id] || [],
-      }));
-      onSubmitQuiz(studentName.trim(), compiledAnswers);
+      const compiledAnswers = compileSubmissions();
+      onSubmitQuiz(studentName.trim(), constructStudentInfoString(), compiledAnswers, examQuestions);
     } else {
       setShowSubmitConfirm(true);
     }
@@ -124,7 +287,33 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
     return `${min}:${sec < 10 ? "0" : ""}${sec}`;
   };
 
+  const now = new Date();
+  const isBeforeStart = quiz.startTime && new Date(quiz.startTime) > now;
+  const isAfterEnd = quiz.endTime && new Date(quiz.endTime) < now;
+  const isTimeLocked = isBeforeStart || isAfterEnd;
+
   if (!isStarted) {
+    if (isTimeLocked) {
+      return (
+        <div className="max-w-2xl mx-auto bg-white border border-slate-100 rounded-2xl p-8 shadow-md text-center" id="quiz-runner-start">
+          <div className="inline-flex p-4 bg-amber-50 text-amber-600 rounded-2xl mb-4">
+            <Clock className="w-10 h-10" />
+          </div>
+          <h1 className="text-2xl font-bold text-slate-800 leading-tight mb-2">{quiz.title}</h1>
+          <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">Đề thi hiện không trong thời gian cho phép.</p>
+          
+          <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 inline-block text-left mb-6">
+            {quiz.startTime && (
+              <p className="text-sm text-slate-700"><strong>Mở lúc:</strong> {new Date(quiz.startTime).toLocaleString('vi-VN')}</p>
+            )}
+            {quiz.endTime && (
+              <p className="text-sm text-slate-700"><strong>Đóng lúc:</strong> {new Date(quiz.endTime).toLocaleString('vi-VN')}</p>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="max-w-2xl mx-auto bg-white border border-slate-100 rounded-2xl p-8 shadow-md" id="quiz-runner-start">
         <div className="text-center space-y-4 mb-8">
@@ -138,7 +327,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
         <div className="grid grid-cols-2 gap-4 border-y border-slate-50 py-4 mb-6 text-center bg-slate-50/50 rounded-xl">
           <div className="space-y-0.5">
             <p className="text-[10px] uppercase font-bold text-slate-400">Số câu hỏi</p>
-            <p className="text-lg font-bold text-indigo-600">{quiz.questions.length} câu</p>
+            <p className="text-lg font-bold text-indigo-600">{examQuestions.length} câu</p>
           </div>
           <div className="space-y-0.5">
             <p className="text-[10px] uppercase font-bold text-slate-400">Thời gian làm bài</p>
@@ -149,27 +338,91 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
         </div>
 
         <form onSubmit={handleStartExam} className="space-y-4">
-          <div className="space-y-2">
-            <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
-              <User className="w-3.5 h-3.5 text-indigo-600" /> Nhập Họ và Tên của học sinh để bắt đầu:
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="Nhập tên đầy đủ của bạn..."
-              value={studentName}
-              onChange={(e) => {
-                setStudentName(e.target.value);
-                if (e.target.value.trim()) setNameError("");
-              }}
-              className="w-full text-sm px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:outline-none focus:border-indigo-500 focus:bg-white transition-all font-semibold text-slate-800"
-            />
-            {nameError && (
-              <p className="text-xs text-rose-500 font-medium flex items-center gap-1 mt-1.5 animate-pulse">
-                <AlertTriangle className="w-3.5 h-3.5" /> {nameError}
-              </p>
-            )}
-          </div>
+          {quiz.requireStudentInfo && quiz.studentInfoFields && quiz.studentInfoFields.length > 0 ? (
+            quiz.studentInfoFields.map((field, idx) => {
+              // Special case: Try to link the first field that looks like "name" to studentName state
+              // But for simplicity, we just bind to dynamicInfo. We extract studentName in handleStartExam.
+              return (
+                <div key={field.id} className="space-y-2">
+                  <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+                    {idx === 0 && <User className="w-3.5 h-3.5 text-indigo-600" />} {field.label} <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder={`Nhập ${field.label.toLowerCase()}...`}
+                    value={dynamicInfo[field.id] || ""}
+                    onChange={(e) => {
+                      setDynamicInfo({ ...dynamicInfo, [field.id]: e.target.value });
+                      setNameError("");
+                    }}
+                    className="w-full text-sm px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:outline-none focus:border-indigo-500 focus:bg-white transition-all font-semibold text-slate-800"
+                  />
+                </div>
+              );
+            })
+          ) : (
+            <>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+                  <User className="w-3.5 h-3.5 text-indigo-600" /> Nhập Họ và Tên của học sinh để bắt đầu <span className="text-red-500">*</span>:
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Nhập tên đầy đủ của bạn..."
+                  value={studentName}
+                  onChange={(e) => {
+                    setStudentName(e.target.value);
+                    if (e.target.value.trim()) setNameError("");
+                  }}
+                  className="w-full text-sm px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:outline-none focus:border-indigo-500 focus:bg-white transition-all font-semibold text-slate-800"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+                  Lớp (Tuỳ chọn):
+                </label>
+                <input
+                  type="text"
+                  placeholder="Nhập lớp của bạn (ví dụ: 10A1)..."
+                  value={studentClass}
+                  onChange={(e) => setStudentClass(e.target.value)}
+                  className="w-full text-sm px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:outline-none focus:border-indigo-500 focus:bg-white transition-all font-semibold text-slate-800"
+                />
+              </div>
+            </>
+          )}
+
+          {nameError && (
+            <p className="text-xs text-rose-500 font-medium flex items-center gap-1 mt-1.5 animate-pulse">
+              <AlertTriangle className="w-3.5 h-3.5" /> {nameError}
+            </p>
+          )}
+
+          {quiz.password && (
+            <div className="space-y-2 pt-2 border-t border-slate-100">
+              <label className="text-xs font-semibold text-slate-600 flex items-center gap-1">
+                Mật khẩu đề thi <span className="text-red-500">*</span>:
+              </label>
+              <input
+                type="password"
+                required
+                placeholder="Nhập mật khẩu..."
+                value={passwordInput}
+                onChange={(e) => {
+                  setPasswordInput(e.target.value);
+                  setPasswordError("");
+                }}
+                className="w-full text-sm px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl focus:outline-none focus:border-indigo-500 focus:bg-white transition-all font-semibold text-slate-800"
+              />
+              {passwordError && (
+                <p className="text-xs text-rose-500 font-medium flex items-center gap-1 mt-1.5 animate-pulse">
+                  <AlertTriangle className="w-3.5 h-3.5" /> {passwordError}
+                </p>
+              )}
+            </div>
+          )}
 
           <button
             type="submit"
@@ -182,7 +435,44 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
     );
   }
 
-  const activeQuestion = quiz.questions[activeQuestionIdx];
+  const getSectionHeaderForQuestion = (q: Question, questionsList: Question[]) => {
+    const getPriority = (quest: Question) => {
+      if (quest.questionType === "single") return 1;
+      if (quest.questionType === "multiple") return 2;
+      if (quest.questionType === "true_false" || quest.questionType === "true_false_cluster") return 3;
+      if (quest.questionType === "short_answer") return 4;
+      return 5;
+    };
+
+    const currentPriority = getPriority(q);
+    const presentPriorities = Array.from(new Set(questionsList.map(getPriority))).sort((a, b) => a - b);
+    const index = presentPriorities.indexOf(currentPriority);
+    const partNumbers = ["I", "II", "III", "IV", "V"];
+    const partNum = partNumbers[index] || (index + 1).toString();
+
+    let title = "";
+    let desc = "";
+    if (currentPriority === 1) {
+      title = `PHẦN ${partNum}: TRẮC NGHIỆM MỘT LỰA CHỌN`;
+      desc = "Mỗi câu hỏi chỉ có một phương án trả lời đúng.";
+    } else if (currentPriority === 2) {
+      title = `PHẦN ${partNum}: TRẮC NGHIỆM NHIỀU LỰA CHỌN`;
+      desc = "Mỗi câu hỏi có thể có nhiều phương án trả lời đúng.";
+    } else if (currentPriority === 3) {
+      title = `PHẦN ${partNum}: CÂU HỎI ĐÚNG / SAI`;
+      desc = "Với mỗi ý/mệnh đề, hãy chọn Đúng hoặc Sai.";
+    } else if (currentPriority === 4) {
+      title = `PHẦN ${partNum}: CÂU HỎI TRẢ LỜI NGẮN`;
+      desc = "Hãy điền đáp án ngắn chính xác vào ô trống.";
+    } else {
+      title = `PHẦN ${partNum}: CÁC CÂU HỎI KHÁC`;
+      desc = "Câu hỏi tự luận hoặc định dạng khác.";
+    }
+
+    return { title, desc };
+  };
+
+  const activeQuestion = examQuestions[activeQuestionIdx];
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-4 gap-6" id="quiz-runner-active">
@@ -206,27 +496,86 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
         {/* Question grid navigation (Moodle-style) */}
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm space-y-4">
           <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">Danh sách câu hỏi</h3>
-          <div className="grid grid-cols-5 gap-2">
-            {quiz.questions.map((q, idx) => {
-              const isAnswered = (currentAnswers[q.id] || []).length > 0;
-              const isActive = activeQuestionIdx === idx;
-              return (
-                <button
-                  key={q.id}
-                  onClick={() => setActiveQuestionIdx(idx)}
-                  className={`aspect-square inline-flex items-center justify-center text-xs font-bold rounded-lg transition-all ${
-                    isActive
-                      ? "bg-indigo-600 text-white shadow-sm"
-                      : isAnswered
-                      ? "bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100"
-                      : "bg-slate-50 border border-slate-100 text-slate-500 hover:bg-slate-100"
-                  }`}
-                >
-                  {idx + 1}
-                </button>
-              );
-            })}
-          </div>
+          
+          {quiz.groupByType ? (
+            <div className="space-y-4">
+              {(() => {
+                const getPriority = (quest: Question) => {
+                  if (quest.questionType === "single") return 1;
+                  if (quest.questionType === "multiple") return 2;
+                  if (quest.questionType === "true_false" || quest.questionType === "true_false_cluster") return 3;
+                  if (quest.questionType === "short_answer") return 4;
+                  return 5;
+                };
+
+                const presentPriorities = Array.from(new Set(examQuestions.map(getPriority))).sort((a: number, b: number) => a - b);
+                const partNumbers = ["I", "II", "III", "IV", "V"];
+
+                return presentPriorities.map((priority, pIdx) => {
+                  const partNum = partNumbers[pIdx] || (pIdx + 1).toString();
+                  let partLabel = "";
+                  if (priority === 1) partLabel = `Phần ${partNum}: Trắc nghiệm`;
+                  else if (priority === 2) partLabel = `Phần ${partNum}: Nhiều đáp án`;
+                  else if (priority === 3) partLabel = `Phần ${partNum}: Đúng/Sai`;
+                  else if (priority === 4) partLabel = `Phần ${partNum}: Điền ngắn`;
+                  else partLabel = `Phần ${partNum}: Khác`;
+
+                  const matchingQuestions = examQuestions
+                    .map((q, originalIdx) => ({ q, originalIdx }))
+                    .filter(item => getPriority(item.q) === priority);
+
+                  return (
+                    <div key={priority} className="space-y-1.5">
+                      <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-wider">{partLabel}</h4>
+                      <div className="grid grid-cols-5 gap-2">
+                        {matchingQuestions.map(({ q, originalIdx }) => {
+                          const isAnswered = (currentAnswers[q.id] || []).length > 0;
+                          const isActive = activeQuestionIdx === originalIdx;
+                          return (
+                            <button
+                              key={q.id}
+                              onClick={() => setActiveQuestionIdx(originalIdx)}
+                              className={`aspect-square inline-flex items-center justify-center text-xs font-bold rounded-lg transition-all ${
+                                isActive
+                                  ? "bg-indigo-600 text-white shadow-sm"
+                                  : isAnswered
+                                  ? "bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                                  : "bg-slate-50 border border-slate-100 text-slate-500 hover:bg-slate-100"
+                              }`}
+                            >
+                              {originalIdx + 1}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          ) : (
+            <div className="grid grid-cols-5 gap-2">
+              {examQuestions.map((q, idx) => {
+                const isAnswered = (currentAnswers[q.id] || []).length > 0;
+                const isActive = activeQuestionIdx === idx;
+                return (
+                  <button
+                    key={q.id}
+                    onClick={() => setActiveQuestionIdx(idx)}
+                    className={`aspect-square inline-flex items-center justify-center text-xs font-bold rounded-lg transition-all ${
+                      isActive
+                        ? "bg-indigo-600 text-white shadow-sm"
+                        : isAnswered
+                        ? "bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100"
+                        : "bg-slate-50 border border-slate-100 text-slate-500 hover:bg-slate-100"
+                    }`}
+                  >
+                    {idx + 1}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           <button
             onClick={() => handleSubmit(false)}
@@ -245,9 +594,21 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
               Bài thi: {quiz.title}
             </span>
             <span className="text-xs text-slate-400 font-medium">
-              Câu {activeQuestionIdx + 1} / {quiz.questions.length}
+              Câu {activeQuestionIdx + 1} / {examQuestions.length}
             </span>
           </div>
+
+          {quiz.groupByType && (
+            (() => {
+              const { title, desc } = getSectionHeaderForQuestion(activeQuestion, examQuestions);
+              return (
+                <div className="mb-5 p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl">
+                  <h3 className="text-xs font-black text-indigo-950 tracking-wider uppercase mb-1">{title}</h3>
+                  <p className="text-[11px] text-indigo-600 font-medium leading-relaxed">{desc}</p>
+                </div>
+              );
+            })()
+          )}
 
           {/* Question Text block */}
           <div className="space-y-1">
@@ -270,8 +631,18 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
             </div>
 
             <h2 className="text-lg font-bold text-slate-800 pt-3 leading-relaxed">
-              {activeQuestion.questionText}
+              <LatexRenderer>{activeQuestion.questionText}</LatexRenderer>
             </h2>
+            {activeQuestion.imageUrl && (
+              <div className="mt-4">
+                <img 
+                  src={activeQuestion.imageUrl} 
+                  alt="Question image" 
+                  className="max-h-64 object-contain rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:opacity-90 transition-opacity" 
+                  onClick={() => setZoomedImage(activeQuestion.imageUrl!)}
+                />
+              </div>
+            )}
           </div>
 
           {/* Answer Area depending on question type */}
@@ -300,7 +671,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
                         <span className="font-bold text-slate-400 shrink-0 uppercase">
                           {String.fromCharCode(65 + idx)}.
                         </span>
-                        <span>{option}</span>
+                        <span><LatexRenderer>{option}</LatexRenderer></span>
                       </div>
                     </label>
                   );
@@ -331,7 +702,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
                         <span className="font-bold text-slate-400 shrink-0 uppercase">
                           {String.fromCharCode(65 + idx)}.
                         </span>
-                        <span>{option}</span>
+                        <span><LatexRenderer>{option}</LatexRenderer></span>
                       </div>
                     </label>
                   );
@@ -372,7 +743,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
                    const answerValue = (currentAnswers[activeQuestion.id] || [])[idx];
                    return (
                      <div key={idx} className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                       <span className="text-sm font-medium text-slate-800">{option}</span>
+                       <span className="text-sm font-medium text-slate-800"><LatexRenderer>{option}</LatexRenderer></span>
                        <div className="flex items-center gap-2 shrink-0">
                          {["Đúng", "Sai"].map(choice => (
                            <label key={choice} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${answerValue === choice ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-bold' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
@@ -399,6 +770,127 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
                 />
               </div>
             )}
+
+            {activeQuestion.questionType === "case_study" && activeQuestion.subQuestions && activeQuestion.subQuestions.length > 0 && (
+              <div className="space-y-6 border-l-2 border-indigo-100 pl-4">
+                <div className="bg-indigo-50/50 p-3 rounded-lg border border-indigo-100 mb-2">
+                  <p className="text-xs text-indigo-950 font-semibold">Đây là câu hỏi dạng đọc hiểu / tình huống có chứa {activeQuestion.subQuestions.length} câu hỏi phụ. Hãy trả lời lần lượt từng câu hỏi bên dưới.</p>
+                </div>
+                {activeQuestion.subQuestions.map((subQ, sIdx) => {
+                  const subAnsId = `${activeQuestion.id}_${subQ.id}`;
+                  return (
+                    <div key={subQ.id} className="p-4 bg-white border border-slate-200/80 rounded-xl shadow-xs space-y-3">
+                      <div className="flex items-start gap-1.5 border-b border-slate-100 pb-2">
+                        <span className="text-xs font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md shrink-0">Câu {sIdx + 1}</span>
+                        <h4 className="text-sm font-semibold text-slate-800 leading-relaxed"><LatexRenderer>{subQ.questionText}</LatexRenderer></h4>
+                      </div>
+
+                      {/* Single Choice Sub-question */}
+                      {subQ.questionType === "single" && (
+                        <div className="grid grid-cols-1 gap-2">
+                          {subQ.options.map((option, optIdx) => {
+                            const isChecked = (currentAnswers[subAnsId] || []).includes(option);
+                            return (
+                              <label
+                                key={optIdx}
+                                className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-xs cursor-pointer transition-all ${
+                                  isChecked
+                                    ? "bg-indigo-50/50 border-indigo-200 text-indigo-950 font-medium"
+                                    : "bg-slate-50/30 border-slate-100 text-slate-600 hover:bg-slate-50"
+                                }`}
+                              >
+                                <input
+                                  type="radio"
+                                  name={`subq-${subAnsId}`}
+                                  checked={isChecked}
+                                  onChange={() => handleSelectAnswer(subAnsId, option, false)}
+                                  className="w-3.5 h-3.5 text-indigo-600 mt-0.5"
+                                />
+                                <span className="font-bold text-slate-400 shrink-0 uppercase">
+                                  {String.fromCharCode(65 + optIdx)}.
+                                </span>
+                                <span>{option}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Multiple Choice Sub-question */}
+                      {subQ.questionType === "multiple" && (
+                        <div className="grid grid-cols-1 gap-2">
+                          {subQ.options.map((option, optIdx) => {
+                            const isChecked = (currentAnswers[subAnsId] || []).includes(option);
+                            return (
+                              <label
+                                key={optIdx}
+                                className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-xs cursor-pointer transition-all ${
+                                  isChecked
+                                    ? "bg-indigo-50/50 border-indigo-200 text-indigo-950 font-medium"
+                                    : "bg-slate-50/30 border-slate-100 text-slate-600 hover:bg-slate-50"
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => handleSelectAnswer(subAnsId, option, true)}
+                                  className="w-3.5 h-3.5 text-indigo-600 rounded mt-0.5"
+                                />
+                                <span className="font-bold text-slate-400 shrink-0 uppercase">
+                                  {String.fromCharCode(65 + optIdx)}.
+                                </span>
+                                <span>{option}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* True False Sub-question */}
+                      {subQ.questionType === "true_false" && (
+                        <div className="flex gap-4">
+                          {["Đúng", "Sai"].map((choice, optIdx) => {
+                            const isChecked = (currentAnswers[subAnsId] || []).includes(choice);
+                            return (
+                              <label
+                                key={optIdx}
+                                className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-xs cursor-pointer transition-all ${
+                                  isChecked
+                                    ? "bg-indigo-50/50 border-indigo-200 text-indigo-950 font-medium"
+                                    : "bg-slate-50/30 border-slate-100 text-slate-600 hover:bg-slate-50"
+                                }`}
+                              >
+                                <input
+                                  type="radio"
+                                  name={`subq-${subAnsId}`}
+                                  checked={isChecked}
+                                  onChange={() => handleSelectAnswer(subAnsId, choice, false)}
+                                  className="w-3.5 h-3.5 text-indigo-600"
+                                />
+                                <span>{choice}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Short Answer Sub-question */}
+                      {subQ.questionType === "short_answer" && (
+                        <div className="space-y-1">
+                          <input
+                            type="text"
+                            placeholder="Nhập đáp án ngắn..."
+                            value={currentAnswers[subAnsId]?.[0] || ""}
+                            onChange={(e) => handleTextChange(subAnsId, e.target.value)}
+                            className="w-full text-xs px-3 py-2 bg-slate-50/50 border border-slate-200 rounded-lg focus:outline-none focus:border-indigo-500 focus:bg-white text-slate-800"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Navigation between active questions */}
@@ -411,7 +903,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
               Câu trước
             </button>
 
-            {activeQuestionIdx < quiz.questions.length - 1 ? (
+            {activeQuestionIdx < examQuestions.length - 1 ? (
               <button
                 onClick={() => setActiveQuestionIdx((prev) => prev + 1)}
                 className="inline-flex items-center gap-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
@@ -469,6 +961,29 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
                 Đồng ý nộp bài
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Zoom Modal */}
+      {zoomedImage && (
+        <div 
+          className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm cursor-zoom-out"
+          onClick={() => setZoomedImage(null)}
+        >
+          <div className="relative max-w-5xl w-full h-full flex flex-col items-center justify-center pointer-events-none">
+            <button 
+              className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-full backdrop-blur-md pointer-events-auto transition-colors"
+              onClick={() => setZoomedImage(null)}
+            >
+              <X className="w-6 h-6" />
+            </button>
+            <img 
+              src={zoomedImage} 
+              alt="Zoomed" 
+              className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl pointer-events-auto cursor-default border border-white/10" 
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
         </div>
       )}

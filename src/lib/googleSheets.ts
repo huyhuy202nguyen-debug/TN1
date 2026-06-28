@@ -67,11 +67,13 @@ async function initializeSheetHeaders(accessToken: string, spreadsheetId: string
     "Lời Giải Thích Chi Tiết",
     "Danh Mục / Chủ Đề",
     "Độ Khó (easy/medium/hard)",
+    "URL Hình Ảnh",
   ];
 
   const resultHeaders = [
     "Thời Gian Nộp Bài",
     "Họ và Tên Học Sinh",
+    "Lớp",
     "Tên Bài Thi",
     "Điểm Số (Thang 10)",
     "Số Câu Đúng",
@@ -79,8 +81,12 @@ async function initializeSheetHeaders(accessToken: string, spreadsheetId: string
     "Chi Tiết Đáp Án",
   ];
 
-  await writeSheetRange(accessToken, spreadsheetId, `${QUESTION_SHEET}!A1:H1`, [questionHeaders]);
-  await writeSheetRange(accessToken, spreadsheetId, `${RESULT_SHEET}!A1:G1`, [resultHeaders]);
+  for (let i = 1; i <= 150; i++) {
+    resultHeaders.push(`Câu ${i}`);
+  }
+
+  await writeSheetRange(accessToken, spreadsheetId, `${QUESTION_SHEET}!A1:I1`, [questionHeaders]);
+  await writeSheetRange(accessToken, spreadsheetId, `${RESULT_SHEET}!A1:ZZ1`, [resultHeaders]);
 }
 
 /**
@@ -173,7 +179,7 @@ async function writeSheetRange(accessToken: string, spreadsheetId: string, range
  */
 export async function fetchQuestionsFromSheet(accessToken: string, spreadsheetId: string): Promise<Question[]> {
   const response = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(QUESTION_SHEET + "!A2:H1000")}`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(QUESTION_SHEET + "!A2:I1000")}`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
     }
@@ -202,6 +208,7 @@ export async function fetchQuestionsFromSheet(accessToken: string, spreadsheetId
       const explanation = row[5] || "";
       const category = row[6] || "Chung";
       const difficulty = (row[7] || "medium") as Question["difficulty"];
+      const imageUrl = row[8] || undefined;
 
       return {
         id,
@@ -212,8 +219,48 @@ export async function fetchQuestionsFromSheet(accessToken: string, spreadsheetId
         explanation,
         category,
         difficulty,
+        imageUrl,
       };
     });
+}
+
+/**
+ * Fetches all results from the Results sheet.
+ */
+export async function fetchResultsFromSheet(accessToken: string, spreadsheetId: string): Promise<any[]> {
+  const response = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A2:EZ1000")}`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    if (errorData.error?.code === 400 && errorData.error?.message?.includes("Unable to parse range")) {
+      // Sheet might not exist, return empty
+      return [];
+    }
+    throw new Error(errorData.error?.message || "Failed to fetch results");
+  }
+
+  const data = await response.json();
+  const rows = data.values || [];
+  
+  return rows.map((row: any[]) => {
+    return {
+      submittedAt: row[0] || "",
+      studentName: row[1] || "",
+      studentClass: row[2] || "",
+      quizId: row[3] || "",
+      quizTitle: row[4] || "",
+      score: parseFloat(row[5] || "0"),
+      correctCount: parseInt(row[6] || "0", 10),
+      totalQuestions: parseInt(row[7] || "0", 10),
+      detailSummary: row[8] || "",
+      questionAnswers: row.slice(9) // Array of answers starting from column J (index 9)
+    };
+  });
 }
 
 /**
@@ -229,10 +276,11 @@ export async function appendQuestionsToSheet(accessToken: string, spreadsheetId:
     q.explanation,
     q.category,
     q.difficulty,
+    q.imageUrl || "",
   ]);
 
   const response = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(QUESTION_SHEET + "!A:H")}:append?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(QUESTION_SHEET + "!A:I")}:append?valueInputOption=USER_ENTERED`,
     {
       method: "POST",
       headers: {
@@ -257,7 +305,7 @@ export async function appendQuestionsToSheet(accessToken: string, spreadsheetId:
 export async function syncAllQuestionsToSheet(accessToken: string, spreadsheetId: string, questions: Question[]): Promise<void> {
   // First clear the old values
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(QUESTION_SHEET + "!A2:H1000")}:clear`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(QUESTION_SHEET + "!A2:I1000")}:clear`,
     {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -267,7 +315,7 @@ export async function syncAllQuestionsToSheet(accessToken: string, spreadsheetId
   if (questions.length === 0) return;
 
   // Then write the new values starting at row 2
-  const range = `${QUESTION_SHEET}!A2:H${questions.length + 1}`;
+  const range = `${QUESTION_SHEET}!A2:I${questions.length + 1}`;
   const rows = questions.map((q) => [
     q.id,
     q.questionText,
@@ -277,6 +325,7 @@ export async function syncAllQuestionsToSheet(accessToken: string, spreadsheetId
     q.explanation,
     q.category,
     q.difficulty,
+    q.imageUrl || "",
   ]);
 
   await writeSheetRange(accessToken, spreadsheetId, range, rows);
@@ -296,6 +345,8 @@ export async function appendResultToSheet(accessToken: string, spreadsheetId: st
   const row = [
     result.submittedAt,
     result.studentName,
+    result.studentClass || "",
+    result.quizId,
     result.quizTitle,
     result.score.toFixed(1),
     result.correctCount,
@@ -303,8 +354,13 @@ export async function appendResultToSheet(accessToken: string, spreadsheetId: st
     detailSummary,
   ];
 
+  // Append individual answers for each question to support statistics
+  result.detailedGrades.forEach(g => {
+    row.push(g.studentAnswers.join(", "));
+  });
+
   const response = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:G")}:append?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
     {
       method: "POST",
       headers: {

@@ -9,8 +9,10 @@ import LZString from "lz-string";
 import SheetsConnection from "./components/SheetsConnection";
 import QuestionBankView from "./components/QuestionBankView";
 import QuizBuilderView from "./components/QuizBuilderView";
+import QuizManagementView from "./components/QuizManagementView";
 import QuizRunnerView from "./components/QuizRunnerView";
 import QuizResultsView from "./components/QuizResultsView";
+import QuizStatsView from "./components/QuizStatsView";
 
 // Icons
 import {
@@ -34,7 +36,8 @@ import {
 
 export default function App() {
   // Navigation
-  const [activeTab, setActiveTab] = useState<"dashboard" | "bank" | "builder" | "runner" | "results">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "bank" | "builder" | "manager" | "runner" | "results" | "stats">("dashboard");
+  const [statsQuiz, setStatsQuiz] = useState<Quiz | null>(null);
 
   // Auth & Storage Config
   const [user, setUser] = useState<User | null>(null);
@@ -95,16 +98,6 @@ export default function App() {
     if (cachedId) setSpreadsheetId(cachedId);
     if (cachedUrl) setSpreadsheetUrl(cachedUrl);
 
-    // Load local quizzes from cache to persist tests created
-    const cachedQuizzes = localStorage.getItem("local_quizzes");
-    if (cachedQuizzes) {
-      try {
-        setQuizzes(JSON.parse(cachedQuizzes));
-      } catch (e) {
-        console.error("Failed to parse local quizzes:", e);
-      }
-    }
-
     // Initialize Firebase Auth
     initAuth(
       (currentUser, token) => {
@@ -121,10 +114,43 @@ export default function App() {
     );
   }, []);
 
+  // Load quizzes when user changes
+  useEffect(() => {
+    if (user) {
+      const userKey = `local_quizzes_${user.uid}`;
+      const cachedQuizzes = localStorage.getItem(userKey);
+      if (cachedQuizzes) {
+        try {
+          setQuizzes(JSON.parse(cachedQuizzes));
+        } catch (e) {
+          console.error("Failed to parse local quizzes:", e);
+          setQuizzes([]);
+        }
+      } else {
+        // Fallback for migration
+        const oldQuizzes = localStorage.getItem("local_quizzes");
+        if (oldQuizzes) {
+          try {
+            const parsed = JSON.parse(oldQuizzes);
+            setQuizzes(parsed);
+            localStorage.setItem(userKey, oldQuizzes);
+            localStorage.removeItem("local_quizzes");
+          } catch (e) {}
+        } else {
+          setQuizzes([]);
+        }
+      }
+    } else {
+      setQuizzes([]);
+    }
+  }, [user]);
+
   // Sync quizzes to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem("local_quizzes", JSON.stringify(quizzes));
-  }, [quizzes]);
+    if (user) {
+      localStorage.setItem(`local_quizzes_${user.uid}`, JSON.stringify(quizzes));
+    }
+  }, [quizzes, user]);
 
   // 2. Fetch Questions from connected Google Sheet
   const loadQuestionsFromSheets = async (accessToken: string, idToFetch: string) => {
@@ -269,8 +295,18 @@ export default function App() {
     setDeleteQuizId(quizId);
   };
 
-  const confirmDeleteQuiz = () => {
+  const confirmDeleteQuiz = async () => {
     if (deleteQuizId) {
+      const quizToDelete = quizzes.find((q) => q.id === deleteQuizId);
+      if (quizToDelete && quizToDelete.publishedId) {
+        try {
+          await fetch(`/api/shared-quiz/${quizToDelete.publishedId}`, {
+            method: "DELETE",
+          });
+        } catch (err) {
+          console.error("Failed to delete shared quiz from backend", err);
+        }
+      }
       setQuizzes(quizzes.filter((q) => q.id !== deleteQuizId));
       setDeleteQuizId(null);
     }
@@ -283,12 +319,13 @@ export default function App() {
   };
 
   // 10. Grade exam and sync submissions automatically to Google Sheets
-  const handleGrading = async (studentName: string, submissions: AnswerSubmission[]) => {
+  const handleGrading = async (studentName: string, studentClass: string, submissions: AnswerSubmission[], drawnQuestions?: Question[]) => {
     if (!activeQuiz) return;
 
     let correctCount = 0;
+    const questionsToGrade = drawnQuestions || activeQuiz.questions;
 
-    const detailedGrades = activeQuiz.questions.map((q) => {
+    const detailedGrades = questionsToGrade.map((q) => {
       const studentAns = submissions.find((s) => s.questionId === q.id)?.selectedAnswers || [];
 
       // Logic for checking correctness based on question type
@@ -326,34 +363,125 @@ export default function App() {
         isCorrect =
           studentAns.length === 1 &&
           q.correctAnswers.some((ans) => ans.toLowerCase().trim() === studentAns[0].toLowerCase().trim());
+      } else if (q.questionType === "case_study") {
+        const subGrades = (q.subQuestions || []).map((subQ) => {
+          const subAnsId = `${q.id}_${subQ.id}`;
+          const subStudentAns = submissions.find((s) => s.questionId === subAnsId)?.selectedAnswers || [];
+          
+          let subIsCorrect = false;
+          if (subQ.questionType === "single" || subQ.questionType === "true_false") {
+            subIsCorrect =
+              subStudentAns.length === 1 &&
+              subQ.correctAnswers.length === 1 &&
+              subStudentAns[0].toLowerCase().trim() === subQ.correctAnswers[0].toLowerCase().trim();
+          } else if (subQ.questionType === "multiple") {
+            const sortedStudent = [...subStudentAns].sort();
+            const sortedCorrect = [...subQ.correctAnswers].sort();
+            subIsCorrect =
+              sortedStudent.length === sortedCorrect.length &&
+              sortedStudent.every((val, idx) => val.toLowerCase().trim() === sortedCorrect[idx].toLowerCase().trim());
+          } else if (subQ.questionType === "short_answer") {
+            subIsCorrect =
+              subStudentAns.length === 1 &&
+              subQ.correctAnswers.some((ans) => ans.toLowerCase().trim() === subStudentAns[0].toLowerCase().trim());
+          }
+
+          return {
+            questionId: subQ.id,
+            questionText: subQ.questionText,
+            questionType: subQ.questionType,
+            isCorrect: subIsCorrect,
+            studentAnswers: subStudentAns,
+            correctAnswers: subQ.correctAnswers,
+            options: subQ.options,
+            explanation: subQ.explanation,
+          };
+        });
+
+        const subCorrectCount = subGrades.filter(sg => sg.isCorrect).length;
+        const subTotalCount = q.subQuestions && q.subQuestions.length > 0 ? q.subQuestions.length : 1;
+        partialPoints = subCorrectCount / subTotalCount;
+        isCorrect = subCorrectCount === subTotalCount && subTotalCount > 0;
       }
 
-      if (q.questionType === "true_false_cluster") {
+      if (q.questionType === "true_false_cluster" || q.questionType === "case_study") {
         correctCount += partialPoints;
       } else if (isCorrect) {
         correctCount++;
       }
 
-      return {
+      const returnedGrade: any = {
         questionId: q.id,
+        questionText: q.questionText,
+        questionType: q.questionType,
         isCorrect,
         studentAnswers: studentAns,
         correctAnswers: q.correctAnswers,
+        options: q.options,
         explanation: q.explanation,
+        imageUrl: q.imageUrl,
       };
+
+      if (q.questionType === "case_study") {
+        // Build subGrades array
+        const subGrades = (q.subQuestions || []).map((subQ) => {
+          const subAnsId = `${q.id}_${subQ.id}`;
+          const subStudentAns = submissions.find((s) => s.questionId === subAnsId)?.selectedAnswers || [];
+          
+          let subIsCorrect = false;
+          if (subQ.questionType === "single" || subQ.questionType === "true_false") {
+            subIsCorrect =
+              subStudentAns.length === 1 &&
+              subQ.correctAnswers.length === 1 &&
+              subStudentAns[0].toLowerCase().trim() === subQ.correctAnswers[0].toLowerCase().trim();
+          } else if (subQ.questionType === "multiple") {
+            const sortedStudent = [...subStudentAns].sort();
+            const sortedCorrect = [...subQ.correctAnswers].sort();
+            subIsCorrect =
+              sortedStudent.length === sortedCorrect.length &&
+              sortedStudent.every((val, idx) => val.toLowerCase().trim() === sortedCorrect[idx].toLowerCase().trim());
+          } else if (subQ.questionType === "short_answer") {
+            subIsCorrect =
+              subStudentAns.length === 1 &&
+              subQ.correctAnswers.some((ans) => ans.toLowerCase().trim() === subStudentAns[0].toLowerCase().trim());
+          }
+
+          return {
+            questionId: subQ.id,
+            questionText: subQ.questionText,
+            questionType: subQ.questionType,
+            isCorrect: subIsCorrect,
+            studentAnswers: subStudentAns,
+            correctAnswers: subQ.correctAnswers,
+            options: subQ.options,
+            explanation: subQ.explanation,
+          };
+        });
+        returnedGrade.subGrades = subGrades;
+      }
+
+      return returnedGrade;
+    });
+    
+    // Sort detailedGrades to match original quiz question order for consistent spreadsheet columns
+    detailedGrades.sort((a, b) => {
+      const idxA = activeQuiz.questions.findIndex(q => q.id === a.questionId);
+      const idxB = activeQuiz.questions.findIndex(q => q.id === b.questionId);
+      return (idxA !== -1 ? idxA : 9999) - (idxB !== -1 ? idxB : 9999);
     });
 
-    const score = (correctCount / activeQuiz.questions.length) * 10;
+    const score = (correctCount / questionsToGrade.length) * 10;
 
     const newResult: SubmissionResult = {
       id: `res-${Date.now()}`,
       quizId: activeQuiz.id,
       quizTitle: activeQuiz.title,
       studentName,
+      studentClass,
       submittedAt: new Date().toLocaleString("vi-VN"),
       score,
       correctCount,
-      totalQuestions: activeQuiz.questions.length,
+      totalQuestions: questionsToGrade.length,
       answers: submissions,
       detailedGrades,
     };
@@ -448,6 +576,9 @@ export default function App() {
 
       const shareUrl = `${window.location.origin}${window.location.pathname}?q=${data.shortId}`;
       
+      // Update local quiz with publishedId
+      setQuizzes(quizzes.map(q => q.id === quiz.id ? { ...q, publishedId: data.shortId } : q));
+
       setShareCodeModal({
         isOpen: true,
         code: data.shortId,
@@ -457,6 +588,57 @@ export default function App() {
       console.error("Failed to generate share link", err);
       setGlobalNotification({
         message: "Có lỗi khi tạo link chia sẻ: " + (err.message || "Lỗi không xác định."),
+        type: "error"
+      });
+    }
+  };
+
+  const handleUpdateQuiz = async (updatedQuiz: Quiz) => {
+    setQuizzes(quizzes.map(q => q.id === updatedQuiz.id ? updatedQuiz : q));
+    
+    if (updatedQuiz.publishedId) {
+      // silently re-publish to update the config on Firebase
+      try {
+        const accessToken = getAccessToken();
+        const response = await fetch("/api/share-quiz", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            quiz: updatedQuiz,
+            accessToken,
+            spreadsheetId
+          })
+        });
+        
+        if (!response.ok) throw new Error("Failed to update published quiz");
+        setGlobalNotification({ message: "Đã cập nhật cấu hình bài thi (bao gồm cả phiên bản đang xuất bản).", type: "success" });
+      } catch (err) {
+        console.error("Failed to update published config", err);
+        setGlobalNotification({ message: "Đã lưu cục bộ nhưng lỗi cập nhật lên máy chủ.", type: "error" });
+      }
+    } else {
+      setGlobalNotification({ message: "Đã cập nhật cấu hình bài thi.", type: "success" });
+    }
+  };
+
+  const handleUnpublishQuiz = async (quiz: Quiz) => {
+    if (!quiz.publishedId) return;
+    try {
+      const response = await fetch(`/api/shared-quiz/${quiz.publishedId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error("Failed to delete from server");
+      }
+      setQuizzes(quizzes.map(q => q.id === quiz.id ? { ...q, publishedId: undefined } : q));
+      setGlobalNotification({
+        message: "Đã hủy xuất bản bài thi.",
+        type: "success"
+      });
+    } catch (err) {
+      console.error("Failed to unpublish quiz", err);
+      setGlobalNotification({
+        message: "Có lỗi khi hủy xuất bản bài thi.",
         type: "error"
       });
     }
@@ -508,6 +690,14 @@ export default function App() {
                 }`}
               >
                 Soạn đề thi
+              </button>
+              <button
+                onClick={() => setActiveTab("manager")}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                  activeTab === "manager" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                Quản lý đề thi
               </button>
             </nav>
           )}
@@ -572,6 +762,14 @@ export default function App() {
               }`}
             >
               Soạn đề
+            </button>
+            <button
+              onClick={() => setActiveTab("manager")}
+              className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-colors ${
+                activeTab === "manager" ? "bg-slate-100 text-slate-950" : "text-slate-400"
+              }`}
+            >
+              Quản lý
             </button>
           </div>
         )}
@@ -662,70 +860,23 @@ export default function App() {
               </div>
             </div>
 
-            {/* Active Quizzes List */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
-              <h2 className="text-base font-bold text-slate-800 mb-4 flex items-center gap-1.5">
-                <FileText className="w-5 h-5 text-indigo-600" /> Danh sách bài thi đang hoạt động
+            {/* Active Quizzes List Link */}
+            <div className="bg-white rounded-2xl border border-slate-100 p-8 shadow-sm flex flex-col items-center text-center">
+              <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-4">
+                <FileText className="w-8 h-8" />
+              </div>
+              <h2 className="text-lg font-bold text-slate-800 mb-2">
+                Quản lý đề thi xuất bản
               </h2>
-
-              {quizzes.length === 0 ? (
-                <div className="text-center py-10 text-slate-400 space-y-2">
-                  <HelpCircle className="w-10 h-10 text-slate-300 mx-auto" />
-                  <p className="text-xs font-semibold">Chưa có đề thi nào được tạo</p>
-                  <p className="text-[10px] max-w-xs mx-auto">
-                    Ấn vào mục "Soạn đề thi" trên thanh điều hướng để tạo ngay một bài kiểm tra nhanh bằng dán văn bản.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {quizzes.map((quiz) => (
-                    <div
-                      key={quiz.id}
-                      className="border border-slate-100 rounded-xl p-5 hover:border-indigo-100 transition-all bg-slate-50/20 flex flex-col justify-between"
-                    >
-                      <div className="space-y-1.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9px] uppercase font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">
-                            {quiz.questions.length} câu hỏi
-                          </span>
-                          <span className="text-[9px] text-slate-400 font-medium">Tạo lúc: {quiz.createdAt}</span>
-                        </div>
-                        <h3 className="text-sm font-bold text-slate-800 leading-snug">{quiz.title}</h3>
-                        <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">{quiz.description}</p>
-                      </div>
-
-                      <div className="flex items-center justify-between border-t border-slate-100 pt-3 mt-4">
-                        <span className="text-[10px] text-slate-500 font-semibold flex items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-slate-400" /> {quiz.timeLimitMinutes} phút
-                        </span>
-
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handleShareQuiz(quiz)}
-                            className="text-slate-400 hover:text-indigo-600 p-1 rounded-lg"
-                            title="Chia sẻ link thi"
-                          >
-                            <Share2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteQuiz(quiz.id)}
-                            className="text-slate-400 hover:text-rose-600 p-1 rounded-lg"
-                            title="Xóa đề thi"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleStartQuiz(quiz)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] rounded-lg transition-colors cursor-pointer"
-                          >
-                            <Play className="w-2.5 h-2.5 fill-white" /> Làm bài thi
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <p className="text-sm text-slate-500 mb-6 max-w-md">
+                Xem danh sách, sao chép liên kết chia sẻ, thiết lập bảo mật và quản lý toàn bộ các bài thi trắc nghiệm đã tạo tại một nơi duy nhất.
+              </p>
+              <button
+                onClick={() => setActiveTab("manager")}
+                className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm hover:shadow cursor-pointer"
+              >
+                Mở hệ thống quản lý <ExternalLink className="w-4 h-4" />
+              </button>
             </div>
           </div>
         )}
@@ -738,6 +889,21 @@ export default function App() {
             spreadsheetId={spreadsheetId}
             isLoading={isLoading}
             onSyncToSheets={handleSyncQuestionsToSheets}
+          />
+        )}
+
+        {activeTab === "manager" && (
+          <QuizManagementView
+            quizzes={quizzes}
+            onDeleteQuiz={handleDeleteQuiz}
+            onShareQuiz={handleShareQuiz}
+            onStartQuiz={handleStartQuiz}
+            onUnpublishQuiz={handleUnpublishQuiz}
+            onUpdateQuiz={handleUpdateQuiz}
+            onViewStats={(quiz) => {
+              setStatsQuiz(quiz);
+              setActiveTab("stats");
+            }}
           />
         )}
 
@@ -755,6 +921,7 @@ export default function App() {
 
         {activeTab === "results" && lastResult && (
           <QuizResultsView
+            quiz={activeQuiz || quizzes.find(q => q.id === lastResult.quizId)}
             result={lastResult}
             isSyncing={isSyncingResult}
             syncError={syncResultError}
@@ -765,6 +932,17 @@ export default function App() {
               setActiveTab("dashboard");
               setIsStudentMode(false);
               window.history.replaceState({}, document.title, window.location.pathname);
+            }}
+          />
+        )}
+
+        {activeTab === "stats" && statsQuiz && (
+          <QuizStatsView
+            quiz={statsQuiz}
+            spreadsheetId={spreadsheetId}
+            onBack={() => {
+              setActiveTab("manager");
+              setStatsQuiz(null);
             }}
           />
         )}

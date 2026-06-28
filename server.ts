@@ -13,9 +13,8 @@ const PORT = 3000;
 app.use(express.json({ limit: "15mb" }));
 
 import fs from "fs";
-import path from "path";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
+import { getFirestore, doc, setDoc, getDoc, deleteDoc } from "firebase/firestore";
 
 // Initialize Firebase using the generated config
 let db: any = null;
@@ -202,8 +201,11 @@ app.post("/api/share-quiz", async (req, res) => {
     return res.status(400).json({ error: "Thiếu thông tin bài thi." });
   }
   
-  // Generate a random 6-character short ID (uppercase)
-  const shortId = Math.random().toString(36).substring(2, 8).toUpperCase();
+  // Use existing publishedId if available, otherwise generate a new one
+  const shortId = quiz.publishedId || Math.random().toString(36).substring(2, 8).toUpperCase();
+  
+  // Ensure quiz object has the publishedId
+  const quizToSave = { ...quiz, publishedId: shortId };
   
   if (!db) {
     return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình trên máy chủ." });
@@ -211,7 +213,7 @@ app.post("/api/share-quiz", async (req, res) => {
 
   try {
     await setDoc(doc(db, "sharedQuizzes", shortId), {
-      quiz,
+      quiz: quizToSave,
       accessToken: accessToken || null,
       spreadsheetId: spreadsheetId || null,
       createdAt: Date.now()
@@ -241,6 +243,21 @@ app.get("/api/get-shared-quiz/:id", async (req, res) => {
   } catch (error: any) {
     console.error("Error fetching shared quiz:", error);
     res.status(500).json({ error: "Không thể lấy thông tin bài thi." });
+  }
+});
+
+// 6. API: Delete a shared quiz
+app.delete("/api/shared-quiz/:id", async (req, res) => {
+  if (!db) {
+    return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
+  }
+
+  try {
+    await deleteDoc(doc(db, "sharedQuizzes", req.params.id.toUpperCase()));
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("Error deleting shared quiz:", error);
+    res.status(500).json({ error: "Không thể xóa bài thi." });
   }
 });
 
@@ -319,13 +336,13 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
 
 // Serve Vite front-end
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -333,9 +350,13 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
 startServer();
+
+export default app;
