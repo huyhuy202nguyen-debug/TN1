@@ -1143,7 +1143,7 @@ Giải thích: Trái Đất là hành tinh lớn nhất trong số bốn hành t
                               {subQ.explanation && (
                                 <p className="text-[9px] text-slate-500 italic pt-1 border-t border-slate-100/60 flex items-center gap-1">
                                   <HelpCircle className="w-2.5 h-2.5 shrink-0 text-slate-400" />
-                                  <span>Giải thích: {subQ.explanation}</span>
+                                  <span>Giải thích: <LatexRenderer>{subQ.explanation}</LatexRenderer></span>
                                 </p>
                               )}
                             </div>
@@ -1540,7 +1540,7 @@ D. H2SO4
                       {subQ.explanation && (
                         <p className="text-[10px] text-slate-500 italic pt-1 border-t border-slate-100 flex items-center gap-1">
                           <HelpCircle className="w-3 h-3 shrink-0" />
-                          <span>Giải thích: {subQ.explanation}</span>
+                          <span>Giải thích: <LatexRenderer>{subQ.explanation}</LatexRenderer></span>
                         </p>
                       )}
                     </div>
@@ -1553,7 +1553,7 @@ D. H2SO4
                 <HelpCircle className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
                 <div>
                   <span className="font-semibold text-slate-700">Lời giải chi tiết:</span>{" "}
-                  <span className="italic">{q.explanation}</span>
+                  <span className="italic"><LatexRenderer>{q.explanation}</LatexRenderer></span>
                 </div>
               </div>
             </div>

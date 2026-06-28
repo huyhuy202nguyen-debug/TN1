@@ -12,64 +12,30 @@ provider.addScope("https://www.googleapis.com/auth/drive.file");
 provider.addScope("https://www.googleapis.com/auth/userinfo.email");
 provider.addScope("https://www.googleapis.com/auth/userinfo.profile");
 
-// Force Google to issue a Refresh Token
+// Prompt for account selection but don't force consent screen on every login
 provider.setCustomParameters({
-  access_type: "offline",
-  prompt: "consent"
+  prompt: "select_account"
 });
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
 
 // Helper to check if a token is still valid (e.g., less than 50 minutes old)
-const isTokenValid = (timestampStr: string | null): boolean => {
-  if (!timestampStr) return false;
-  const elapsed = Date.now() - parseInt(timestampStr, 10);
-  return elapsed < 50 * 60 * 1000; // 50 minutes
+export const isGoogleTokenExpired = (): boolean => {
+  const token = localStorage.getItem("gapi_access_token");
+  const timestamp = localStorage.getItem("gapi_token_timestamp");
+  if (!token || !timestamp) return true;
+  const elapsed = Date.now() - parseInt(timestamp, 10);
+  return elapsed > 50 * 60 * 1000; // 50 minutes limit
 };
 
-// Auto-refresh token if needed
+// Check and return valid access token from storage or cache
 export const getValidAccessToken = async (): Promise<string | null> => {
   let token = localStorage.getItem("gapi_access_token");
-  const timestamp = localStorage.getItem("gapi_token_timestamp");
-  const refreshToken = localStorage.getItem("gapi_refresh_token");
-
-  if (token && isTokenValid(timestamp)) {
+  if (token && !isGoogleTokenExpired()) {
     cachedAccessToken = token;
     return token;
   }
-
-  // If expired or missing, try to renew using the Refresh Token
-  if (refreshToken) {
-    console.log("Access token expired/missing, attempting to renew with Refresh Token...");
-    try {
-      const response = await fetch("/api/refresh-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to call refresh token API");
-      }
-
-      const data = await response.json();
-      if (data.accessToken) {
-        token = data.accessToken;
-        localStorage.setItem("gapi_access_token", token!);
-        localStorage.setItem("gapi_token_timestamp", Date.now().toString());
-        cachedAccessToken = token;
-        return token;
-      }
-    } catch (error) {
-      console.error("Error refreshing Google Access Token:", error);
-      // Clean up invalid tokens if refresh fails
-      localStorage.removeItem("gapi_access_token");
-      localStorage.removeItem("gapi_token_timestamp");
-      localStorage.removeItem("gapi_refresh_token");
-    }
-  }
-
   return null;
 };
 

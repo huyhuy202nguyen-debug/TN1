@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { FileSpreadsheet, CheckCircle, RefreshCw, LogOut, Sparkles, AlertCircle } from "lucide-react";
 import { User } from "firebase/auth";
 import { createQuizSpreadsheet, setupExistingSpreadsheet } from "../lib/googleSheets";
@@ -31,6 +31,23 @@ export default function SheetsConnection({
   const [inputUrlOrId, setInputUrlOrId] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isExpired, setIsExpired] = useState(false);
+
+  useEffect(() => {
+    if (!user) {
+      setIsExpired(false);
+      return;
+    }
+
+    const checkToken = async () => {
+      const { isGoogleTokenExpired } = await import("../lib/firebase");
+      setIsExpired(isGoogleTokenExpired());
+    };
+
+    checkToken();
+    const interval = setInterval(checkToken, 10000); // Check every 10 seconds
+    return () => clearInterval(interval);
+  }, [user]);
 
   const extractSpreadsheetId = (input: string): string => {
     const match = input.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
@@ -154,6 +171,46 @@ export default function SheetsConnection({
               </svg>
               Đồng ý và kết nối Google Account
             </button>
+          </div>
+        </div>
+      ) : isExpired ? (
+        <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="w-5.5 h-5.5 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-semibold text-amber-900">Phiên kết nối Google đã hết hạn</h3>
+              <p className="text-xs text-amber-700 mt-1 leading-relaxed">
+                Để bảo mật, Google giới hạn thời gian kết nối của mỗi phiên làm việc là <strong>1 giờ</strong>. Hãy bấm làm mới kết nối để tiếp tục tự động đồng bộ câu hỏi và kết quả thi.
+              </p>
+              {spreadsheetId && (
+                <a
+                  href={spreadsheetUrl || "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-amber-800 hover:underline inline-flex items-center gap-1 mt-2 font-medium"
+                >
+                  Bảng tính đang liên kết &rarr;
+                </a>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-2 w-full md:w-auto shrink-0">
+            <button
+              onClick={onLogin}
+              className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold rounded-lg transition-colors shadow-sm cursor-pointer active:scale-95"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Làm mới kết nối
+            </button>
+            {spreadsheetId && (
+              <button
+                onClick={() => onSpreadsheetConnected("", "")}
+                className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-3 py-2.5 bg-white hover:bg-rose-50 border border-slate-200 text-rose-600 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              >
+                Hủy liên kết
+              </button>
+            )}
           </div>
         </div>
       ) : (

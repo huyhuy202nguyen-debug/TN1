@@ -261,53 +261,6 @@ app.delete("/api/shared-quiz/:id", async (req, res) => {
   }
 });
 
-// 6.1. API: Refresh Google Access Token securely
-app.post("/api/refresh-token", async (req, res) => {
-  const { refreshToken } = req.body;
-
-  if (!refreshToken) {
-    return res.status(400).json({ error: "Thiếu Refresh Token." });
-  }
-
-  try {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-
-    if (!clientId || !clientSecret) {
-      return res.status(500).json({ 
-        error: "Ứng dụng chưa được cấu hình GOOGLE_CLIENT_ID hoặc GOOGLE_CLIENT_SECRET trên server. Hãy cấu hình chúng trong phần Cài đặt bí mật." 
-      });
-    }
-
-    const response = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: refreshToken,
-        grant_type: "refresh_token",
-      }).toString(),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error_description || data.error || "Không thể làm mới token.");
-    }
-
-    res.json({
-      accessToken: data.access_token,
-      expiresIn: data.expires_in,
-    });
-  } catch (error: any) {
-    console.error("Lỗi khi làm mới Google Access Token:", error);
-    res.status(500).json({ error: error.message || "Lỗi khi gia hạn Token." });
-  }
-});
-
 // 5. API: Submit a quiz result directly to the teacher's Google Sheet
 app.post("/api/submit-quiz/:id", async (req, res) => {
   if (!db) {
@@ -345,25 +298,108 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
       })
       .join("\n");
 
-    const row = [
-      result.submittedAt,
-      result.studentName,
-      result.studentClass || "",
-      result.quizId,
-      result.quizTitle,
-      result.score.toFixed(1),
-      result.correctCount,
-      result.totalQuestions,
-      detailSummary,
-    ];
-
-    // Append individual answers for each question to support statistics
-    result.detailedGrades.forEach((g: any) => {
-      if (g.questionType === "case_study") {
-        row.push(g.studentAnswers.join(" | "));
-      } else {
-        row.push(g.studentAnswers.join(", "));
+    // Fetch current headers from results sheet to align columns dynamically
+    let headers: string[] = [];
+    try {
+      const getHeadersRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (getHeadersRes.ok) {
+        const headerData: any = await getHeadersRes.json();
+        if (headerData.values && headerData.values[0] && headerData.values[0].length > 0) {
+          headers = headerData.values[0];
+        }
       }
+    } catch (e) {
+      console.error("Failed to fetch existing headers from Google Sheets on backend:", e);
+    }
+
+    // If no headers exist, initialize them with defaults
+    if (headers.length === 0) {
+      headers = [
+        "Thời Gian Nộp Bài",
+        "Họ và Tên Học Sinh",
+        "Lớp",
+        "Mã Bài Thi (ID)",
+        "Tên Bài Thi",
+        "Điểm Số (Thang 10)",
+        "Số Câu Đúng",
+        "Tổng Số Câu Hỏi",
+        "Chi Tiết Đáp Án",
+      ];
+      for (let i = 1; i <= Math.max(150, result.detailedGrades.length); i++) {
+        headers.push(`Câu ${i}`);
+      }
+      try {
+        await fetch(
+          `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}?valueInputOption=USER_ENTERED`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              values: [headers],
+            }),
+          }
+        );
+      } catch (e) {
+        console.error("Failed to write backend fallback headers:", e);
+      }
+    }
+
+    // Map fields dynamically to matching column positions based on actual headers in the sheet
+    const row = headers.map((headerName: string) => {
+      const norm = headerName.trim().toLowerCase();
+      
+      if (norm.includes("thời gian")) {
+        return result.submittedAt || "";
+      }
+      if (norm.includes("họ và tên") || norm.includes("học sinh") || norm.includes("tên học sinh")) {
+        return result.studentName || "";
+      }
+      if (norm.includes("lớp")) {
+        return result.studentClass || "";
+      }
+      if (norm.includes("mã bài thi") || norm.includes("mã đề")) {
+        return result.quizId || "";
+      }
+      if (norm.includes("tên bài thi") || norm.includes("tiêu đề") || norm.includes("tên đề")) {
+        return result.quizTitle || "";
+      }
+      if (norm.includes("điểm") || norm.includes("score")) {
+        return typeof result.score === "number" ? result.score.toFixed(1) : String(result.score || "0.0");
+      }
+      if (norm.includes("số câu đúng") || norm.includes("câu đúng")) {
+        return result.correctCount !== undefined ? result.correctCount : 0;
+      }
+      if (norm.includes("tổng số câu") || norm.includes("tổng câu")) {
+        return result.totalQuestions !== undefined ? result.totalQuestions : 0;
+      }
+      if (norm.includes("chi tiết đáp án") || norm.includes("chi tiết")) {
+        return detailSummary || "";
+      }
+      
+      // Match "Câu X" (e.g., "Câu 1", "Câu 2", ...)
+      const questionMatch = norm.match(/câu\s*(\d+)/);
+      if (questionMatch) {
+        const qNum = parseInt(questionMatch[1], 10);
+        const grade = result.detailedGrades && result.detailedGrades[qNum - 1];
+        if (grade) {
+          if (grade.studentAnswers) {
+            if (grade.questionType === "case_study") {
+              return grade.studentAnswers.join(" | ");
+            } else {
+              return grade.studentAnswers.join(", ");
+            }
+          }
+        }
+      }
+      return "";
     });
 
     const makeRequest = async () => {

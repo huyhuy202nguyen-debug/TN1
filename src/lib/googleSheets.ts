@@ -343,25 +343,96 @@ export async function appendResultToSheet(accessToken: string, spreadsheetId: st
     })
     .join("\n");
 
-  const row = [
-    result.submittedAt,
-    result.studentName,
-    result.studentClass || "",
-    result.quizId,
-    result.quizTitle,
-    result.score.toFixed(1),
-    result.correctCount,
-    result.totalQuestions,
-    detailSummary,
-  ];
-
-  // Append individual answers for each question to support statistics
-  result.detailedGrades.forEach(g => {
-    if (g.questionType === "case_study") {
-      row.push(g.studentAnswers.join(" | "));
-    } else {
-      row.push(g.studentAnswers.join(", "));
+  // Fetch current headers from results sheet to align columns dynamically
+  let headers: string[] = [];
+  try {
+    const getHeadersRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+    if (getHeadersRes.ok) {
+      const headerData = await getHeadersRes.json();
+      if (headerData.values && headerData.values[0] && headerData.values[0].length > 0) {
+        headers = headerData.values[0];
+      }
     }
+  } catch (e) {
+    console.error("Failed to fetch existing headers from Google Sheets:", e);
+  }
+
+  // If no headers exist, initialize them with defaults
+  if (headers.length === 0) {
+    headers = [
+      "Thời Gian Nộp Bài",
+      "Họ và Tên Học Sinh",
+      "Lớp",
+      "Mã Bài Thi (ID)",
+      "Tên Bài Thi",
+      "Điểm Số (Thang 10)",
+      "Số Câu Đúng",
+      "Tổng Số Câu Hỏi",
+      "Chi Tiết Đáp Án",
+    ];
+    for (let i = 1; i <= Math.max(150, result.detailedGrades.length); i++) {
+      headers.push(`Câu ${i}`);
+    }
+    try {
+      await writeSheetRange(accessToken, spreadsheetId, `${RESULT_SHEET}!A1:ZZ1`, [headers]);
+    } catch (e) {
+      console.error("Failed to write fallback headers:", e);
+    }
+  }
+
+  // Map fields dynamically to matching column positions based on actual headers in the sheet
+  const row = headers.map((headerName) => {
+    const norm = headerName.trim().toLowerCase();
+    
+    if (norm.includes("thời gian")) {
+      return result.submittedAt || "";
+    }
+    if (norm.includes("họ và tên") || norm.includes("học sinh") || norm.includes("tên học sinh")) {
+      return result.studentName || "";
+    }
+    if (norm.includes("lớp")) {
+      return result.studentClass || "";
+    }
+    if (norm.includes("mã bài thi") || norm.includes("mã đề")) {
+      return result.quizId || "";
+    }
+    if (norm.includes("tên bài thi") || norm.includes("tiêu đề") || norm.includes("tên đề")) {
+      return result.quizTitle || "";
+    }
+    if (norm.includes("điểm") || norm.includes("score")) {
+      return typeof result.score === "number" ? result.score.toFixed(1) : String(result.score || "0.0");
+    }
+    if (norm.includes("số câu đúng") || norm.includes("câu đúng")) {
+      return result.correctCount !== undefined ? result.correctCount : 0;
+    }
+    if (norm.includes("tổng số câu") || norm.includes("tổng câu")) {
+      return result.totalQuestions !== undefined ? result.totalQuestions : 0;
+    }
+    if (norm.includes("chi tiết đáp án") || norm.includes("chi tiết")) {
+      return detailSummary || "";
+    }
+    
+    // Match "Câu X" (e.g., "Câu 1", "Câu 2", ...)
+    const questionMatch = norm.match(/câu\s*(\d+)/);
+    if (questionMatch) {
+      const qNum = parseInt(questionMatch[1], 10);
+      const grade = result.detailedGrades && result.detailedGrades[qNum - 1];
+      if (grade) {
+        if (grade.studentAnswers) {
+          if (grade.questionType === "case_study") {
+            return grade.studentAnswers.join(" | ");
+          } else {
+            return grade.studentAnswers.join(", ");
+          }
+        }
+      }
+    }
+    return "";
   });
 
   const makeRequest = async () => {

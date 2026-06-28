@@ -255,45 +255,69 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
     setIsStarted(true);
   };
 
+  const saveSessionLocally = (updatedAnswers: Record<string, string[]>) => {
+    if (isStarted) {
+      const session = {
+        studentName,
+        studentClass,
+        dynamicInfo,
+        isStarted,
+        examQuestions,
+        currentAnswers: updatedAnswers,
+        activeQuestionIdx,
+        violations,
+        examEndTime
+      };
+      localStorage.setItem(`quiz_session_${quiz.id}`, JSON.stringify(session));
+    }
+  };
+
   const handleSelectAnswer = (qId: string, value: string, isMulti: boolean) => {
     const existing = currentAnswers[qId] || [];
+    let updated: Record<string, string[]>;
 
     if (isMulti) {
       if (existing.includes(value)) {
-        setCurrentAnswers({
+        updated = {
           ...currentAnswers,
           [qId]: existing.filter((item) => item !== value),
-        });
+        };
       } else {
-        setCurrentAnswers({
+        updated = {
           ...currentAnswers,
           [qId]: [...existing, value],
-        });
+        };
       }
     } else {
       // Single choice, true_false, short_answer
-      setCurrentAnswers({
+      updated = {
         ...currentAnswers,
         [qId]: [value],
-      });
+      };
     }
+    setCurrentAnswers(updated);
+    saveSessionLocally(updated);
   };
 
   const handleClusterAnswer = (qId: string, optIndex: number, value: string, totalOptions: number) => {
     const existing = currentAnswers[qId] || new Array(totalOptions).fill("");
     const newAnswers = [...existing];
     newAnswers[optIndex] = value;
-    setCurrentAnswers({
+    const updated = {
       ...currentAnswers,
       [qId]: newAnswers,
-    });
+    };
+    setCurrentAnswers(updated);
+    saveSessionLocally(updated);
   };
 
   const handleTextChange = (qId: string, val: string) => {
-    setCurrentAnswers({
+    const updated = {
       ...currentAnswers,
       [qId]: [val],
-    });
+    };
+    setCurrentAnswers(updated);
+    saveSessionLocally(updated);
   };
 
   const constructStudentInfoString = () => {
@@ -572,7 +596,13 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
 
         {/* Question grid navigation (Moodle-style) */}
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm space-y-4">
-          <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">Danh sách câu hỏi</h3>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider">Danh sách câu hỏi</h3>
+            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-md font-medium shrink-0 animate-fade-in shadow-sm border border-emerald-100">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              Tự lưu nháp
+            </span>
+          </div>
           
           {quiz.groupByType ? (
             <div className="space-y-4">

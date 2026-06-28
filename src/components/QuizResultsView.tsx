@@ -288,7 +288,7 @@ export default function QuizResultsView({
                                 {!subShouldHideCorrect && subG.explanation && (
                                   <p className="text-[10px] text-slate-500 italic flex items-center gap-1 bg-white/50 p-1.5 rounded border border-slate-100/50 mt-1">
                                     <HelpCircle className="w-3.5 h-3.5 shrink-0 text-slate-400" />
-                                    <span>Giải thích: {subG.explanation}</span>
+                                    <span>Giải thích: <LatexRenderer>{subG.explanation}</LatexRenderer></span>
                                   </p>
                                 )}
                               </div>
@@ -380,7 +380,9 @@ export default function QuizResultsView({
                       <HelpCircle className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
                       <div>
                         <p className="font-semibold text-indigo-950 mb-0.5">Lời giải thích chi tiết:</p>
-                        <p className="text-indigo-900 leading-relaxed italic">{grade.explanation}</p>
+                        <div className="text-indigo-900 leading-relaxed italic">
+                          <LatexRenderer>{grade.explanation}</LatexRenderer>
+                        </div>
                       </div>
                     </div>
                   )}
