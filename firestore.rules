@@ -1,9 +1,17 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Allow read/write access to sharedQuizzes for the server
+    
     match /sharedQuizzes/{quizId} {
-      allow read, write: if true;
+      // 1. Cho phép bất kỳ ai (kể cả học sinh) được phép đọc thông tin của MỘT ĐỀ THI CỤ THỂ nếu biết chính xác publishedId (Mục đích để tải đề vào làm bài)
+      allow get: if true;
+
+      // 2. Tuyệt đối KHÔNG CHO PHÉP bất kỳ ai thực hiện lệnh truy vấn lấy DANH SÁCH tất cả đề thi đã xuất bản trên Firestore
+      allow list: if false;
+
+      // 3. Chỉ cho phép Giáo viên đã đăng nhập và xác thực qua hệ thống Google Auth mới có quyền tạo mới, chỉnh sửa hoặc xóa đề thi
+      allow write: if request.auth != null;
     }
+    
   }
 }

@@ -575,8 +575,8 @@ export default function App() {
   };
 
   const handleStudentJoin = () => {
+    setIsStudentMode(true);
     setJoinCodeInput("");
-    setJoinModalOpen(true);
   };
 
   const submitJoinCode = () => {
@@ -695,7 +695,33 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans antialiased text-slate-800 flex flex-col">
       {/* Top Header navbar */}
-      {!isStudentMode && (
+      {isStudentMode ? (
+        <header className="bg-white border-b border-slate-100 py-4 px-6 sticky top-0 z-50 shadow-sm">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-md shadow-emerald-100">
+                <Brain className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="font-bold text-slate-900 tracking-tight text-base sm:text-lg">
+                  Cổng Làm Bài Thi Trực Tuyến
+                </span>
+                <span className="text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded ml-2 font-medium">
+                  Học sinh
+                </span>
+              </div>
+            </div>
+            {spreadsheetId && (
+              <button
+                onClick={() => setIsStudentMode(false)}
+                className="text-xs text-indigo-600 hover:text-indigo-800 font-bold bg-indigo-50 hover:bg-indigo-100/80 border border-indigo-150 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+              >
+                Trở lại GV
+              </button>
+            )}
+          </div>
+        </header>
+      ) : (
         <header className="bg-white border-b border-slate-100 py-4 px-6 sticky top-0 z-50 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -723,30 +749,34 @@ export default function App() {
               >
                 Trang chủ
               </button>
-              <button
-                onClick={() => setActiveTab("bank")}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                  activeTab === "bank" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
-                }`}
-              >
-                Ngân hàng câu hỏi
-              </button>
-              <button
-                onClick={() => setActiveTab("builder")}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                  activeTab === "builder" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
-                }`}
-              >
-                Soạn đề thi
-              </button>
-              <button
-                onClick={() => setActiveTab("manager")}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                  activeTab === "manager" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
-                }`}
-              >
-                Quản lý đề thi
-              </button>
+              {spreadsheetId && (
+                <>
+                  <button
+                    onClick={() => setActiveTab("bank")}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                      activeTab === "bank" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                    }`}
+                  >
+                    Ngân hàng câu hỏi
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("builder")}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                      activeTab === "builder" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                    }`}
+                  >
+                    Soạn đề thi
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("manager")}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
+                      activeTab === "manager" ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-900"
+                    }`}
+                  >
+                    Quản lý đề thi
+                  </button>
+                </>
+              )}
             </nav>
           )}
 
@@ -795,30 +825,34 @@ export default function App() {
             >
               Trang chủ
             </button>
-            <button
-              onClick={() => setActiveTab("bank")}
-              className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-colors ${
-                activeTab === "bank" ? "bg-slate-100 text-slate-950" : "text-slate-400"
-              }`}
-            >
-              Ngân hàng
-            </button>
-            <button
-              onClick={() => setActiveTab("builder")}
-              className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-colors ${
-                activeTab === "builder" ? "bg-slate-100 text-slate-950" : "text-slate-400"
-              }`}
-            >
-              Soạn đề
-            </button>
-            <button
-              onClick={() => setActiveTab("manager")}
-              className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-colors ${
-                activeTab === "manager" ? "bg-slate-100 text-slate-950" : "text-slate-400"
-              }`}
-            >
-              Quản lý
-            </button>
+            {spreadsheetId && (
+              <>
+                <button
+                  onClick={() => setActiveTab("bank")}
+                  className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-colors ${
+                    activeTab === "bank" ? "bg-slate-100 text-slate-950" : "text-slate-400"
+                  }`}
+                >
+                  Ngân hàng
+                </button>
+                <button
+                  onClick={() => setActiveTab("builder")}
+                  className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-colors ${
+                    activeTab === "builder" ? "bg-slate-100 text-slate-950" : "text-slate-400"
+                  }`}
+                >
+                  Soạn đề
+                </button>
+                <button
+                  onClick={() => setActiveTab("manager")}
+                  className={`flex-1 py-2 text-center text-xs font-bold rounded-lg transition-colors ${
+                    activeTab === "manager" ? "bg-slate-100 text-slate-950" : "text-slate-400"
+                  }`}
+                >
+                  Quản lý
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -832,135 +866,202 @@ export default function App() {
 
         {/* Core Router Views */}
         {activeTab === "dashboard" && (
-          <div className="space-y-6">
-            {/* Hero / Quick Welcome */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 shadow-sm">
-              <div className="space-y-1">
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-800 flex items-center gap-2">
-                  Chào mừng bạn đến với Quiz Builder <Sparkles className="w-5 h-5 text-indigo-600 fill-indigo-100 animate-pulse" />
-                </h1>
-                <p className="text-sm text-slate-500 leading-relaxed max-w-xl">
-                  Hãy soạn thảo, quản lý ngân hàng câu hỏi đa dạng theo chuẩn Moodle và tự động chuyển đổi văn bản đề thi theo chuẩn Azota. Mọi câu hỏi và kết quả thi sẽ tự động đồng bộ trên Google Sheets của bạn.
+          isStudentMode ? (
+            <div className="max-w-md mx-auto bg-white rounded-2xl border border-slate-100 p-8 shadow-sm text-center space-y-6 my-12">
+              <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
+                <Brain className="w-8 h-8" />
+              </div>
+              <div className="space-y-2">
+                <h2 className="text-xl font-bold text-slate-800">Cổng Thi Trực Tuyến</h2>
+                <p className="text-sm text-slate-500">
+                  Nhập mã bài thi gồm 6 ký tự do giáo viên cung cấp để bắt đầu làm bài.
                 </p>
               </div>
-
-              <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto shrink-0">
+              
+              <div className="space-y-4">
+                <input
+                  type="text"
+                  maxLength={6}
+                  value={joinCodeInput}
+                  onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+                  placeholder="VÍ DỤ: ABCDEF"
+                  className="w-full text-center text-3xl tracking-[0.2em] font-black text-slate-900 bg-slate-50 border border-slate-200 rounded-xl px-4 py-4 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-shadow uppercase"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      submitJoinCode();
+                    }
+                  }}
+                />
                 <button
-                  onClick={handleStudentJoin}
-                  className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-colors cursor-pointer"
+                  type="button"
+                  onClick={submitJoinCode}
+                  className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-md shadow-emerald-100 flex items-center justify-center gap-2 cursor-pointer"
+                  disabled={joinCodeInput.trim().length !== 6 || isLoading}
                 >
-                  <Sparkles className="w-4 h-4" /> Học sinh: Nhập mã thi
-                </button>
-                <button
-                  onClick={() => setActiveTab("builder")}
-                  className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-colors cursor-pointer"
-                >
-                  <PlusCircle className="w-4 h-4" /> Soạn đề thi ngay
+                  {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                  <span>Vào phòng thi</span>
                 </button>
               </div>
+
+              {/* If they are actually a teacher (has spreadsheetId), allow them to exit student mode */}
+              {spreadsheetId && (
+                <button
+                  onClick={() => setIsStudentMode(false)}
+                  className="text-xs text-indigo-600 hover:text-indigo-800 font-medium pt-2 block mx-auto underline cursor-pointer"
+                >
+                  Quay lại giao diện Giáo viên
+                </button>
+              )}
             </div>
-
-            {/* Google Sheets Status panel */}
-            <SheetsConnection
-              user={user}
-              needsAuth={needsAuth}
-              spreadsheetId={spreadsheetId}
-              spreadsheetUrl={spreadsheetUrl}
-              isLoading={isLoading}
-              onLogin={handleLogin}
-              onLogout={handleLogout}
-              onSpreadsheetConnected={handleSpreadsheetConnected}
-              onRefreshQuestions={handleRefreshQuestions}
-            />
-
-            {/* Quick Stats Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-              <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm flex items-center gap-4">
-                <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
-                  <Database className="w-6 h-6" />
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase font-bold text-slate-400">Ngân hàng câu hỏi</p>
-                  <p className="text-2xl font-black text-slate-800">{questions.length}</p>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm flex items-center gap-4">
-                <div className="p-3 bg-violet-50 text-violet-600 rounded-xl">
-                  <FileText className="w-6 h-6" />
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase font-bold text-slate-400">Đề thi đã soạn</p>
-                  <p className="text-2xl font-black text-slate-800">{quizzes.length}</p>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm flex items-center gap-4">
-                <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-                  <FileSpreadsheet className="w-6 h-6" />
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase font-bold text-slate-400">Trạng thái đồng bộ</p>
-                  <p className="text-sm font-bold text-emerald-700 mt-1">
-                    {spreadsheetId ? "Đã kết nối" : "Chỉ lưu trình duyệt"}
+          ) : (
+            <div className="space-y-6">
+              {/* Hero / Quick Welcome */}
+              <div className="bg-white rounded-2xl border border-slate-100 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 shadow-sm">
+                <div className="space-y-1">
+                  <h1 className="text-xl sm:text-2xl font-bold text-slate-800 flex items-center gap-2">
+                    Chào mừng bạn đến với Quiz Builder <Sparkles className="w-5 h-5 text-indigo-600 fill-indigo-100 animate-pulse" />
+                  </h1>
+                  <p className="text-sm text-slate-500 leading-relaxed max-w-xl">
+                    Hãy soạn thảo, quản lý ngân hàng câu hỏi đa dạng theo chuẩn Moodle và tự động chuyển đổi văn bản đề thi theo chuẩn Azota. Mọi câu hỏi và kết quả thi sẽ tự động đồng bộ trên Google Sheets của bạn.
                   </p>
                 </div>
-              </div>
-            </div>
 
-            {/* Active Quizzes List Link */}
-            <div className="bg-white rounded-2xl border border-slate-100 p-8 shadow-sm flex flex-col items-center text-center">
-              <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-4">
-                <FileText className="w-8 h-8" />
+                <div className="flex flex-col sm:flex-row gap-2 w-full md:w-auto shrink-0">
+                  <button
+                    onClick={handleStudentJoin}
+                    className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-colors cursor-pointer"
+                  >
+                    <Sparkles className="w-4 h-4" /> Học sinh: Nhập mã thi
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("builder")}
+                    className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm hover:shadow transition-colors cursor-pointer"
+                  >
+                    <PlusCircle className="w-4 h-4" /> Soạn đề thi ngay
+                  </button>
+                </div>
               </div>
-              <h2 className="text-lg font-bold text-slate-800 mb-2">
-                Quản lý đề thi xuất bản
-              </h2>
-              <p className="text-sm text-slate-500 mb-6 max-w-md">
-                Xem danh sách, sao chép liên kết chia sẻ, thiết lập bảo mật và quản lý toàn bộ các bài thi trắc nghiệm đã tạo tại một nơi duy nhất.
-              </p>
-              <button
-                onClick={() => setActiveTab("manager")}
-                className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm hover:shadow cursor-pointer"
-              >
-                Mở hệ thống quản lý <ExternalLink className="w-4 h-4" />
-              </button>
+
+              {/* Google Sheets Status panel */}
+              <SheetsConnection
+                user={user}
+                needsAuth={needsAuth}
+                spreadsheetId={spreadsheetId}
+                spreadsheetUrl={spreadsheetUrl}
+                isLoading={isLoading}
+                onLogin={handleLogin}
+                onLogout={handleLogout}
+                onSpreadsheetConnected={handleSpreadsheetConnected}
+                onRefreshQuestions={handleRefreshQuestions}
+              />
+
+              {/* Quick Stats Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+                <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm flex items-center gap-4">
+                  <div className="p-3 bg-indigo-50 text-indigo-600 rounded-xl">
+                    <Database className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Ngân hàng câu hỏi</p>
+                    <p className="text-2xl font-black text-slate-800">{questions.length}</p>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm flex items-center gap-4">
+                  <div className="p-3 bg-violet-50 text-violet-600 rounded-xl">
+                    <FileText className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Đề thi đã soạn</p>
+                    <p className="text-2xl font-black text-slate-800">{quizzes.length}</p>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm flex items-center gap-4">
+                  <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
+                    <FileSpreadsheet className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-bold text-slate-400">Trạng thái đồng bộ</p>
+                    <p className="text-sm font-bold text-emerald-700 mt-1">
+                      {spreadsheetId ? "Đã kết nối" : "Chỉ lưu trình duyệt"}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Active Quizzes List Link */}
+              <div className="bg-white rounded-2xl border border-slate-100 p-8 shadow-sm flex flex-col items-center text-center">
+                <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-4">
+                  <FileText className="w-8 h-8" />
+                </div>
+                <h2 className="text-lg font-bold text-slate-800 mb-2">
+                  Quản lý đề thi xuất bản
+                </h2>
+                <p className="text-sm text-slate-500 mb-6 max-w-md">
+                  Xem danh sách, sao chép liên kết chia sẻ, thiết lập bảo mật và quản lý toàn bộ các bài thi trắc nghiệm đã tạo tại một nơi duy nhất.
+                </p>
+                <button
+                  onClick={() => setActiveTab("manager")}
+                  className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm hover:shadow cursor-pointer"
+                >
+                  Mở hệ thống quản lý <ExternalLink className="w-4 h-4" />
+                </button>
+              </div>
             </div>
-          </div>
+          )
         )}
 
         {activeTab === "bank" && (
-          <QuestionBankView
-            questions={questions}
-            onAddQuestions={handleAddQuestions}
-            onDeleteQuestion={handleDeleteQuestion}
-            spreadsheetId={spreadsheetId}
-            isLoading={isLoading}
-            onSyncToSheets={handleSyncQuestionsToSheets}
-          />
+          !isStudentMode && spreadsheetId ? (
+            <QuestionBankView
+              questions={questions}
+              onAddQuestions={handleAddQuestions}
+              onDeleteQuestion={handleDeleteQuestion}
+              spreadsheetId={spreadsheetId}
+              isLoading={isLoading}
+              onSyncToSheets={handleSyncQuestionsToSheets}
+            />
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-100 p-8 shadow-sm text-center py-12 text-slate-500 text-sm font-medium">
+              Tài khoản không có quyền truy cập. Vui lòng kết nối Google Sheets để xác thực quyền Giáo viên.
+            </div>
+          )
         )}
 
         {activeTab === "manager" && (
-          <QuizManagementView
-            quizzes={quizzes}
-            onDeleteQuiz={handleDeleteQuiz}
-            onShareQuiz={handleShareQuiz}
-            onStartQuiz={handleStartQuiz}
-            onUnpublishQuiz={handleUnpublishQuiz}
-            onUpdateQuiz={handleUpdateQuiz}
-            onViewStats={(quiz) => {
-              setStatsQuiz(quiz);
-              setActiveTab("stats");
-            }}
-          />
+          !isStudentMode && spreadsheetId ? (
+            <QuizManagementView
+              quizzes={quizzes}
+              onDeleteQuiz={handleDeleteQuiz}
+              onShareQuiz={handleShareQuiz}
+              onStartQuiz={handleStartQuiz}
+              onUnpublishQuiz={handleUnpublishQuiz}
+              onUpdateQuiz={handleUpdateQuiz}
+              onViewStats={(quiz) => {
+                setStatsQuiz(quiz);
+                setActiveTab("stats");
+              }}
+            />
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-100 p-8 shadow-sm text-center py-12 text-slate-500 text-sm font-medium">
+              Tài khoản không có quyền truy cập. Vui lòng kết nối Google Sheets để xác thực quyền Giáo viên.
+            </div>
+          )
         )}
 
         {activeTab === "builder" && (
-          <QuizBuilderView
-            questionBank={questions}
-            onAddQuiz={handleAddQuiz}
-            onAddQuestions={handleAddQuestions}
-          />
+          !isStudentMode && spreadsheetId ? (
+            <QuizBuilderView
+              questionBank={questions}
+              onAddQuiz={handleAddQuiz}
+              onAddQuestions={handleAddQuestions}
+            />
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-100 p-8 shadow-sm text-center py-12 text-slate-500 text-sm font-medium">
+              Tài khoản không có quyền truy cập. Vui lòng kết nối Google Sheets để xác thực quyền Giáo viên.
+            </div>
+          )
         )}
 
         {activeTab === "runner" && activeQuiz && (
@@ -978,7 +1079,11 @@ export default function App() {
             onBackToHome={() => {
               setLastResult(null);
               setActiveTab("dashboard");
-              setIsStudentMode(false);
+              if (!spreadsheetId) {
+                setIsStudentMode(true);
+              } else {
+                setIsStudentMode(false);
+              }
               window.history.replaceState({}, document.title, window.location.pathname);
             }}
             onRetrySync={handleRetrySync}
@@ -986,14 +1091,20 @@ export default function App() {
         )}
 
         {activeTab === "stats" && statsQuiz && (
-          <QuizStatsView
-            quiz={statsQuiz}
-            spreadsheetId={spreadsheetId}
-            onBack={() => {
-              setActiveTab("manager");
-              setStatsQuiz(null);
-            }}
-          />
+          !isStudentMode && spreadsheetId ? (
+            <QuizStatsView
+              quiz={statsQuiz}
+              spreadsheetId={spreadsheetId}
+              onBack={() => {
+                setActiveTab("manager");
+                setStatsQuiz(null);
+              }}
+            />
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-100 p-8 shadow-sm text-center py-12 text-slate-500 text-sm font-medium">
+              Tài khoản không có quyền truy cập. Vui lòng kết nối Google Sheets để xác thực quyền Giáo viên.
+            </div>
+          )
         )}
       </main>
 

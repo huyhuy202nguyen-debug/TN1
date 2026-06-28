@@ -34,6 +34,7 @@ export const parseAzotaTextLocally = (text: string, defaultCategory: string): Qu
         let subExplanationLines: string[] = [];
         let isSubParsingExplanation = false;
         let subQTextLines = [cleanedFirstLine];
+        let expectedSubOptionCode = 65;
 
         for (let k = 1; k < subLines.length; k++) {
           const line = subLines[k];
@@ -58,19 +59,37 @@ export const parseAzotaTextLocally = (text: string, defaultCategory: string): Qu
             continue;
           }
 
-          if (/(?:^|\s+)(\*?[A-Z])[\.\)]\s/.test(line)) {
-            const optMatches = Array.from(line.matchAll(/(?:^|\s+)(\*?[A-Z])[\.\)]\s+(.*?)(?=\s+\*?[A-Z][\.\)]\s+|$)/g));
-            let matchedAnything = false;
-            optMatches.forEach(m => {
+          const optRegex = /(?:^|\s+)(\*?[A-Z])[\.\)]\s+(.*?)(?=\s+\*?[A-Z][\.\)]\s+|$)/g;
+          const matches = Array.from(line.matchAll(optRegex));
+          
+          if (matches.length > 0) {
+            let matchedValidOption = false;
+            let lineLeftover = line;
+
+            matches.forEach(m => {
+              let fullMatch = m[0];
               let marker = m[1].toUpperCase();
               let isCorrect = marker.startsWith('*');
               let letter = marker.replace('*', '');
-              let optText = m[2].trim();
-              subOptionsMap[letter] = optText;
-              if (isCorrect) subCorrectAnswers.push(letter);
-              matchedAnything = true;
+              
+              if (letter.charCodeAt(0) === expectedSubOptionCode) {
+                let optText = m[2].trim();
+                subOptionsMap[letter] = optText;
+                if (isCorrect) subCorrectAnswers.push(letter);
+                
+                expectedSubOptionCode++;
+                matchedValidOption = true;
+                
+                lineLeftover = lineLeftover.replace(fullMatch, '').trim();
+              }
             });
-            if (matchedAnything) continue;
+
+            if (matchedValidOption) {
+              if (lineLeftover.length > 0) {
+                subQTextLines.push(lineLeftover);
+              }
+              continue;
+            }
           }
 
           subQTextLines.push(line);
@@ -193,6 +212,8 @@ export const parseAzotaTextLocally = (text: string, defaultCategory: string): Qu
       return; 
     }
 
+    let expectedOptionCode = 65;
+
     for (let i = 0; i < lines.length; i++) {
       let line = lines[i];
 
@@ -218,19 +239,46 @@ export const parseAzotaTextLocally = (text: string, defaultCategory: string): Qu
         continue;
       }
 
-      if (/(?:^|\s+)(\*?[A-Z])[\.\)]\s/.test(line)) {
-         const optMatches = Array.from(line.matchAll(/(?:^|\s+)(\*?[A-Z])[\.\)]\s+(.*?)(?=\s+\*?[A-Z][\.\)]\s+|$)/g));
-         let matchedAnything = false;
-         optMatches.forEach(m => {
-           let marker = m[1].toUpperCase();
-           let isCorrect = marker.startsWith('*');
-           let letter = marker.replace('*', '');
-           let optText = m[2].trim();
-           optionsMap[letter] = optText;
-           if (isCorrect) correctAnswers.push(letter);
-           matchedAnything = true;
-         });
-         if (matchedAnything) continue; 
+      const optRegex = /(?:^|\s+)(\*?[A-Z])[\.\)]\s+(.*?)(?=\s+\*?[A-Z][\.\)]\s+|$)/g;
+      const matches = Array.from(line.matchAll(optRegex));
+      
+      if (matches.length > 0) {
+        let matchedValidOption = false;
+        let lineLeftover = line;
+
+        matches.forEach(m => {
+          let fullMatch = m[0];
+          let marker = m[1].toUpperCase();
+          let isCorrect = marker.startsWith('*');
+          let letter = marker.replace('*', '');
+          
+          if (letter.charCodeAt(0) === expectedOptionCode) {
+            let optText = m[2].trim();
+            optionsMap[letter] = optText;
+            if (isCorrect) correctAnswers.push(letter);
+            
+            expectedOptionCode++;
+            matchedValidOption = true;
+            
+            lineLeftover = lineLeftover.replace(fullMatch, '').trim(); 
+          }
+        });
+
+        if (matchedValidOption) {
+          if (lineLeftover.length > 0) {
+            if (i === 0) {
+              const qMatch = lineLeftover.match(/^(?:Câu|Bài|Question)\s*\d+[:.]\s*(.*)$/i);
+              if (qMatch) {
+                if (qMatch[1].trim()) qTextLines.push(qMatch[1].trim());
+              } else {
+                qTextLines.push(lineLeftover);
+              }
+            } else {
+              qTextLines.push(lineLeftover);
+            }
+          }
+          continue;
+        }
       }
 
       if (i === 0) {
