@@ -1,0 +1,36 @@
+{
+  "entities": {
+    "SharedQuiz": {
+      "title": "SharedQuiz",
+      "description": "A quiz shared by a teacher",
+      "type": "object",
+      "properties": {
+        "quiz": {
+          "type": "object",
+          "description": "The quiz data"
+        },
+        "accessToken": {
+          "type": "string",
+          "description": "Google Sheets OAuth access token"
+        },
+        "spreadsheetId": {
+          "type": "string",
+          "description": "Google Sheets ID"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Timestamp"
+        }
+      },
+      "required": ["quiz", "createdAt"]
+    }
+  },
+  "firestore": {
+    "sharedQuizzes/{quizId}": {
+      "schema": {
+        "$ref": "#/entities/SharedQuiz"
+      },
+      "description": "Stores shared quizzes"
+    }
+  }
+}

@@ -12,8 +12,27 @@ const PORT = 3000;
 // Set up support for large JSON payloads
 app.use(express.json({ limit: "15mb" }));
 
-// In-memory storage for shared quizzes (Note: Ephemeral, lost on server restart)
-const sharedQuizzes = new Map<string, any>();
+import fs from "fs";
+import path from "path";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, getDoc } from "firebase/firestore";
+
+// Initialize Firebase using the generated config
+let db: any = null;
+try {
+  const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(firebaseConfigPath)) {
+    const firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf-8"));
+    const firebaseApp = initializeApp(firebaseConfig);
+    // CRITICAL: Must use the specific database ID from config
+    db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+    console.log("Firebase initialized successfully on the server.");
+  } else {
+    console.warn("firebase-applet-config.json not found. Firestore will not be available.");
+  }
+} catch (err) {
+  console.error("Failed to initialize Firebase:", err);
+}
 
 // Initialize Google GenAI client lazily
 const getGenAI = (): GoogleGenAI => {
@@ -176,8 +195,8 @@ Yêu cầu đề thi:
   }
 });
 
-// 3. API: Create a shared quiz link (stores quiz + teacher's token in memory)
-app.post("/api/share-quiz", (req, res) => {
+// 3. API: Create a shared quiz link (stores quiz + teacher's token in Firestore)
+app.post("/api/share-quiz", async (req, res) => {
   const { quiz, accessToken, spreadsheetId } = req.body;
   if (!quiz) {
     return res.status(400).json({ error: "Thiếu thông tin bài thi." });
@@ -186,33 +205,61 @@ app.post("/api/share-quiz", (req, res) => {
   // Generate a random 6-character short ID (uppercase)
   const shortId = Math.random().toString(36).substring(2, 8).toUpperCase();
   
-  // Store it in memory
-  sharedQuizzes.set(shortId, {
-    quiz,
-    accessToken,
-    spreadsheetId,
-    createdAt: Date.now()
-  });
-  
-  res.json({ success: true, shortId });
+  if (!db) {
+    return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình trên máy chủ." });
+  }
+
+  try {
+    await setDoc(doc(db, "sharedQuizzes", shortId), {
+      quiz,
+      accessToken: accessToken || null,
+      spreadsheetId: spreadsheetId || null,
+      createdAt: Date.now()
+    });
+    res.json({ success: true, shortId });
+  } catch (error: any) {
+    console.error("Error saving shared quiz to Firestore:", error);
+    res.status(500).json({ error: "Không thể tạo liên kết chia sẻ." });
+  }
 });
 
 // 4. API: Retrieve a shared quiz by short ID
-app.get("/api/get-shared-quiz/:id", (req, res) => {
-  const data = sharedQuizzes.get(req.params.id.toUpperCase());
-  if (!data) {
-    return res.status(404).json({ error: "Không tìm thấy bài thi hoặc bài thi đã hết hạn." });
+app.get("/api/get-shared-quiz/:id", async (req, res) => {
+  if (!db) {
+    return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
   }
-  
-  // We only send the quiz data back to the student, NEVER the accessToken!
-  res.json({ success: true, quiz: data.quiz });
+
+  try {
+    const docSnap = await getDoc(doc(db, "sharedQuizzes", req.params.id.toUpperCase()));
+    if (!docSnap.exists()) {
+      return res.status(404).json({ error: "Không tìm thấy bài thi hoặc bài thi đã hết hạn." });
+    }
+    
+    const data = docSnap.data();
+    // We only send the quiz data back to the student, NEVER the accessToken!
+    res.json({ success: true, quiz: data.quiz });
+  } catch (error: any) {
+    console.error("Error fetching shared quiz:", error);
+    res.status(500).json({ error: "Không thể lấy thông tin bài thi." });
+  }
 });
 
 // 5. API: Submit a quiz result directly to the teacher's Google Sheet
 app.post("/api/submit-quiz/:id", async (req, res) => {
-  const data = sharedQuizzes.get(req.params.id.toUpperCase());
-  if (!data) {
-    return res.status(404).json({ error: "Không tìm thấy phiên làm bài (hoặc đã hết hạn)." });
+  if (!db) {
+    return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
+  }
+
+  let data;
+  try {
+    const docSnap = await getDoc(doc(db, "sharedQuizzes", req.params.id.toUpperCase()));
+    if (!docSnap.exists()) {
+      return res.status(404).json({ error: "Không tìm thấy phiên làm bài (hoặc đã hết hạn)." });
+    }
+    data = docSnap.data();
+  } catch (error: any) {
+    console.error("Error fetching shared quiz for submission:", error);
+    return res.status(500).json({ error: "Lỗi kết nối cơ sở dữ liệu." });
   }
   
   const { result } = req.body;

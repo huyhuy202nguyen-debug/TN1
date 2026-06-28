@@ -1,9 +1,10 @@
 {
-  "projectId": "tn1-azota",
-  "appId": "1:497385022307:web:743e0a6327c5045da7a956",
+  "projectId": "jaunty-centaur-5xhgq",
+  "appId": "1:428332944032:web:7b8f831bd40145b0a8d7c5",
   "apiKey": "AIzaSyBDxFfApbNMFtZoepY7lfUZDQP5I-RIGt4",
-  "authDomain": "tn1-azota.firebaseapp.com",
-  "storageBucket": "tn1-azota.firebasestorage.app",
-  "messagingSenderId": "497385022307",
-  "measurementId": "G-G9GNZKDC7W"
+  "authDomain": "jaunty-centaur-5xhgq.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-quizbuilderandqu-b8575506-774f-4867-a4cc-71cf6ffacd7d",
+  "storageBucket": "jaunty-centaur-5xhgq.firebasestorage.app",
+  "messagingSenderId": "428332944032",
+  "measurementId": ""
 }

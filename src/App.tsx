@@ -58,6 +58,8 @@ export default function App() {
   const [deleteQuizId, setDeleteQuizId] = useState<string | null>(null);
   const [globalNotification, setGlobalNotification] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
   const [shareCodeModal, setShareCodeModal] = useState<{isOpen: boolean, code: string, url: string} | null>(null);
+  const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState("");
 
   // 1. Initial State Loading from localStorage
   useEffect(() => {
@@ -397,14 +399,22 @@ export default function App() {
   };
 
   const handleStudentJoin = () => {
-    const code = prompt("Nhập mã bài thi (6 ký tự):");
-    if (!code) return;
+    setJoinCodeInput("");
+    setJoinModalOpen(true);
+  };
+
+  const submitJoinCode = () => {
+    if (!joinCodeInput.trim()) return;
+    const code = joinCodeInput.trim();
+    setJoinModalOpen(false);
     
     setIsLoading(true);
     fetch(`/api/get-shared-quiz/${code.toUpperCase()}`)
       .then(res => res.json())
       .then(data => {
         if (data.success && data.quiz) {
+          // Update URL so submission works properly
+          window.history.pushState({}, "", `?q=${code.toUpperCase()}`);
           setActiveQuiz(data.quiz);
           setActiveTab("runner");
           setIsStudentMode(true);
@@ -834,6 +844,53 @@ export default function App() {
                 className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm cursor-pointer"
               >
                 Đóng
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Join Code Modal */}
+      {joinModalOpen && (
+        <div className="fixed inset-0 z-[105] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" id="join-code-modal">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100 space-y-4">
+            <h3 className="text-xl font-bold text-slate-900 text-center">Nhập mã bài thi</h3>
+            <p className="text-sm text-slate-600 text-center">
+              Vui lòng nhập mã bài thi gồm 6 ký tự được giáo viên cung cấp.
+            </p>
+            
+            <div>
+              <input
+                type="text"
+                autoFocus
+                maxLength={6}
+                value={joinCodeInput}
+                onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+                placeholder="Ví dụ: ABCDEF"
+                className="w-full text-center text-3xl tracking-[0.2em] font-black text-slate-900 bg-slate-50 border border-slate-200 rounded-xl px-4 py-4 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-shadow uppercase"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    submitJoinCode();
+                  }
+                }}
+              />
+            </div>
+
+            <div className="pt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setJoinModalOpen(false)}
+                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm rounded-xl transition-all cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={submitJoinCode}
+                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm cursor-pointer"
+                disabled={joinCodeInput.trim().length !== 6}
+              >
+                Vào thi
               </button>
             </div>
           </div>
