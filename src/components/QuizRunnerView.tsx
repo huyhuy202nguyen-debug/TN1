@@ -3,6 +3,56 @@ import { Quiz, AnswerSubmission, Question } from "../types";
 import { Clock, User, Award, HelpCircle, ArrowRight, Play, CheckCircle, AlertTriangle, X } from "lucide-react";
 import { LatexRenderer } from "./LatexRenderer";
 
+interface QuizTimerProps {
+  endTime: number;
+  onTimeUp: () => void;
+  isStarted: boolean;
+}
+
+const QuizTimer = React.memo(({ endTime, onTimeUp, isStarted }: QuizTimerProps) => {
+  const calculateRemaining = () => Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+  const [secondsRemaining, setSecondsRemaining] = useState(calculateRemaining);
+
+  useEffect(() => {
+    if (!isStarted || endTime <= 0) return;
+
+    setSecondsRemaining(calculateRemaining());
+
+    const interval = setInterval(() => {
+      const remaining = calculateRemaining();
+      setSecondsRemaining(remaining);
+      if (remaining <= 0) {
+        clearInterval(interval);
+        onTimeUp();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isStarted, endTime, onTimeUp]);
+
+  const formatTime = (seconds: number) => {
+    const min = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+    return `${min}:${sec < 10 ? "0" : ""}${sec}`;
+  };
+
+  return (
+    <div className="bg-slate-900 text-white rounded-2xl p-5 text-center shadow animate-fade-in">
+      <div className="flex items-center justify-center gap-2 mb-2">
+        <Clock className={`w-5 h-5 ${secondsRemaining < 60 ? "text-rose-400 animate-pulse" : "text-indigo-400"}`} />
+        <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Thời gian còn lại</span>
+      </div>
+      <p
+        className={`text-3xl font-bold tracking-tight font-mono ${
+          secondsRemaining < 60 ? "text-rose-500 animate-pulse" : ""
+        }`}
+      >
+        {formatTime(secondsRemaining)}
+      </p>
+    </div>
+  );
+});
+
 interface QuizRunnerViewProps {
   quiz: Quiz;
   onSubmitQuiz: (studentName: string, studentClass: string, submissions: AnswerSubmission[], drawnQuestions?: Question[]) => void;
@@ -25,33 +75,62 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
 
   // Active exam state
   const [currentAnswers, setCurrentAnswers] = useState<Record<string, string[]>>({});
-  const [secondsRemaining, setSecondsRemaining] = useState(quiz.timeLimitMinutes * 60);
+  const [examEndTime, setExamEndTime] = useState<number>(0);
 
   // Active index for scrolling or pagination focus
   const [activeQuestionIdx, setActiveQuestionIdx] = useState(0);
 
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-
   // Proctoring state
   const [violations, setViolations] = useState(0);
 
-  // Start the timer when the exam begins
+  // Load session from localStorage on mount
   useEffect(() => {
-    if (isStarted && quiz.timeLimitMinutes > 0) {
-      timerRef.current = setInterval(() => {
-        setSecondsRemaining((prev) => {
-          if (prev <= 1) {
-            clearInterval(timerRef.current!);
-            // Auto submit when time hits zero
-            handleSubmit(true);
-            return 0;
+    const savedSession = localStorage.getItem(`quiz_session_${quiz.id}`);
+    if (savedSession) {
+      try {
+        const session = JSON.parse(savedSession);
+        if (session.isStarted) {
+          // If the saved exam already expired, don't restore it
+          if (quiz.timeLimitMinutes > 0 && session.examEndTime && Date.now() > session.examEndTime) {
+            localStorage.removeItem(`quiz_session_${quiz.id}`);
+            return;
           }
-          return prev - 1;
-        });
-      }, 1000);
+          setStudentName(session.studentName || "");
+          setStudentClass(session.studentClass || "");
+          setDynamicInfo(session.dynamicInfo || {});
+          setExamQuestions(session.examQuestions || quiz.questions);
+          setCurrentAnswers(session.currentAnswers || {});
+          setActiveQuestionIdx(session.activeQuestionIdx || 0);
+          setViolations(session.violations || 0);
+          setExamEndTime(session.examEndTime || 0);
+          setIsStarted(true);
+        }
+      } catch (err) {
+        console.error("Failed to parse saved quiz session", err);
+      }
     }
-    
-    // Proctoring setup
+  }, [quiz.id]);
+
+  // Save session to localStorage on state changes
+  useEffect(() => {
+    if (isStarted) {
+      const session = {
+        studentName,
+        studentClass,
+        dynamicInfo,
+        isStarted,
+        examQuestions,
+        currentAnswers,
+        activeQuestionIdx,
+        violations,
+        examEndTime
+      };
+      localStorage.setItem(`quiz_session_${quiz.id}`, JSON.stringify(session));
+    }
+  }, [isStarted, studentName, studentClass, dynamicInfo, examQuestions, currentAnswers, activeQuestionIdx, violations, examEndTime, quiz.id]);
+
+  // Proctoring visibility setup
+  useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden && isStarted && quiz.proctoringMode === "monitor_screen_exit") {
         setViolations(v => v + 1);
@@ -64,7 +143,6 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
     }
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
       if (quiz.proctoringMode === "monitor_screen_exit") {
         document.removeEventListener("visibilitychange", handleVisibilityChange);
       }
@@ -123,11 +201,12 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
         if (q.questionType === "multiple") return 2;
         if (q.questionType === "true_false" || q.questionType === "true_false_cluster") return 3;
         if (q.questionType === "short_answer") return 4;
-        return 5;
+        if (q.questionType === "case_study") return 5;
+        return 6;
       };
 
       // Group questions
-      const groups: Record<number, Question[]> = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+      const groups: Record<number, Question[]> = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
       preparedQuestions.forEach((q) => {
         const priority = getPriority(q);
         groups[priority].push(q);
@@ -147,6 +226,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
         ...groups[3],
         ...groups[4],
         ...groups[5],
+        ...groups[6],
       ];
     } else {
       // Shuffle the final list of questions if configured (and if not already randomized from bank)
@@ -170,6 +250,8 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
 
     setExamQuestions(preparedQuestions);
     
+    const endTime = Date.now() + quiz.timeLimitMinutes * 60 * 1000;
+    setExamEndTime(endTime);
     setIsStarted(true);
   };
 
@@ -265,7 +347,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
 
   const handleConfirmSubmit = () => {
     setShowSubmitConfirm(false);
-    if (timerRef.current) clearInterval(timerRef.current);
+    localStorage.removeItem(`quiz_session_${quiz.id}`);
 
     const compiledAnswers = compileSubmissions();
     onSubmitQuiz(studentName.trim(), constructStudentInfoString(), compiledAnswers, examQuestions);
@@ -273,18 +355,12 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
 
   const handleSubmit = (auto: boolean = false) => {
     if (auto) {
-      if (timerRef.current) clearInterval(timerRef.current);
+      localStorage.removeItem(`quiz_session_${quiz.id}`);
       const compiledAnswers = compileSubmissions();
       onSubmitQuiz(studentName.trim(), constructStudentInfoString(), compiledAnswers, examQuestions);
     } else {
       setShowSubmitConfirm(true);
     }
-  };
-
-  const formatTime = (seconds: number) => {
-    const min = Math.floor(seconds / 60);
-    const sec = seconds % 60;
-    return `${min}:${sec < 10 ? "0" : ""}${sec}`;
   };
 
   const now = new Date();
@@ -441,13 +517,14 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
       if (quest.questionType === "multiple") return 2;
       if (quest.questionType === "true_false" || quest.questionType === "true_false_cluster") return 3;
       if (quest.questionType === "short_answer") return 4;
-      return 5;
+      if (quest.questionType === "case_study") return 5;
+      return 6;
     };
 
     const currentPriority = getPriority(q);
     const presentPriorities = Array.from(new Set(questionsList.map(getPriority))).sort((a, b) => a - b);
     const index = presentPriorities.indexOf(currentPriority);
-    const partNumbers = ["I", "II", "III", "IV", "V"];
+    const partNumbers = ["I", "II", "III", "IV", "V", "VI"];
     const partNum = partNumbers[index] || (index + 1).toString();
 
     let title = "";
@@ -464,6 +541,9 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
     } else if (currentPriority === 4) {
       title = `PHẦN ${partNum}: CÂU HỎI TRẢ LỜI NGẮN`;
       desc = "Hãy điền đáp án ngắn chính xác vào ô trống.";
+    } else if (currentPriority === 5) {
+      title = `PHẦN ${partNum}: CÂU HỎI CHÙM / CASE STUDY`;
+      desc = "Đọc kỹ dữ kiện và trả lời các câu hỏi phụ liên quan.";
     } else {
       title = `PHẦN ${partNum}: CÁC CÂU HỎI KHÁC`;
       desc = "Câu hỏi tự luận hoặc định dạng khác.";
@@ -475,23 +555,20 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
   const activeQuestion = examQuestions[activeQuestionIdx];
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-4 gap-6" id="quiz-runner-active">
+    <div 
+      className={`grid grid-cols-1 lg:grid-cols-4 gap-6 ${quiz.proctoringMode !== "off" ? "select-none" : ""}`} 
+      id="quiz-runner-active"
+      onCopy={(e) => quiz.proctoringMode !== "off" && e.preventDefault()}
+      onCut={(e) => quiz.proctoringMode !== "off" && e.preventDefault()}
+      onPaste={(e) => quiz.proctoringMode !== "off" && e.preventDefault()}
+      onContextMenu={(e) => quiz.proctoringMode !== "off" && e.preventDefault()}
+    >
       {/* Question Navigation & Timer block (Col 1 on desktop) */}
       <div className="lg:col-span-1 space-y-4 lg:sticky lg:top-4 h-fit order-first lg:order-last">
         {/* Timer Panel */}
-        <div className="bg-slate-900 text-white rounded-2xl p-5 text-center shadow">
-          <div className="flex items-center justify-center gap-2 mb-2">
-            <Clock className={`w-5 h-5 ${secondsRemaining < 60 ? "text-rose-400 animate-pulse" : "text-indigo-400"}`} />
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Thời gian còn lại</span>
-          </div>
-          <p
-            className={`text-3xl font-bold tracking-tight font-mono ${
-              secondsRemaining < 60 ? "text-rose-500 animate-pulse" : ""
-            }`}
-          >
-            {formatTime(secondsRemaining)}
-          </p>
-        </div>
+        {quiz.timeLimitMinutes > 0 && (
+          <QuizTimer endTime={examEndTime} onTimeUp={() => handleSubmit(true)} isStarted={isStarted} />
+        )}
 
         {/* Question grid navigation (Moodle-style) */}
         <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm space-y-4">
@@ -505,11 +582,12 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
                   if (quest.questionType === "multiple") return 2;
                   if (quest.questionType === "true_false" || quest.questionType === "true_false_cluster") return 3;
                   if (quest.questionType === "short_answer") return 4;
-                  return 5;
+                  if (quest.questionType === "case_study") return 5;
+                  return 6;
                 };
 
                 const presentPriorities = Array.from(new Set(examQuestions.map(getPriority))).sort((a: number, b: number) => a - b);
-                const partNumbers = ["I", "II", "III", "IV", "V"];
+                const partNumbers = ["I", "II", "III", "IV", "V", "VI"];
 
                 return presentPriorities.map((priority, pIdx) => {
                   const partNum = partNumbers[pIdx] || (pIdx + 1).toString();
@@ -518,6 +596,7 @@ export default function QuizRunnerView({ quiz, onSubmitQuiz }: QuizRunnerViewPro
                   else if (priority === 2) partLabel = `Phần ${partNum}: Nhiều đáp án`;
                   else if (priority === 3) partLabel = `Phần ${partNum}: Đúng/Sai`;
                   else if (priority === 4) partLabel = `Phần ${partNum}: Điền ngắn`;
+                  else if (priority === 5) partLabel = `Phần ${partNum}: Câu hỏi chùm`;
                   else partLabel = `Phần ${partNum}: Khác`;
 
                   const matchingQuestions = examQuestions

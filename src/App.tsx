@@ -152,6 +152,33 @@ export default function App() {
     }
   }, [quizzes, user]);
 
+  // Auto-sync offline pending submissions when network comes back online
+  useEffect(() => {
+    const handleOnline = async () => {
+      console.log("Network came online. Attempting to sync pending submissions...");
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("pending_sync_")) {
+          try {
+            const saved = localStorage.getItem(key);
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              await syncResultToSheets(parsed.result);
+              console.log(`Successfully synced pending submission: ${parsed.result.id}`);
+            }
+          } catch (err) {
+            console.error("Failed to auto-sync pending submission:", err);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
+
   // 2. Fetch Questions from connected Google Sheet
   const loadQuestionsFromSheets = async (accessToken: string, idToFetch: string) => {
     setIsLoading(true);
@@ -458,6 +485,7 @@ export default function App() {
           };
         });
         returnedGrade.subGrades = subGrades;
+        returnedGrade.studentAnswers = subGrades.map(sg => sg.studentAnswers.join(", ") || "(Trống)");
       }
 
       return returnedGrade;
@@ -491,6 +519,10 @@ export default function App() {
     setActiveQuiz(null);
 
     // Sync Submission Result to Google Sheets
+    await syncResultToSheets(newResult);
+  };
+
+  const syncResultToSheets = async (result: SubmissionResult) => {
     setIsSyncingResult(true);
     setSyncResultError(null);
     
@@ -504,7 +536,7 @@ export default function App() {
           const response = await fetch(`/api/submit-quiz/${sharedId}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ result: newResult })
+            body: JSON.stringify({ result })
           });
           const data = await response.json();
           if (!response.ok || !data.success) {
@@ -515,14 +547,30 @@ export default function App() {
         // Teacher testing the quiz themselves locally
         const token = getAccessToken();
         if (token && spreadsheetId) {
-          await appendResultToSheet(token, spreadsheetId, newResult);
+          await appendResultToSheet(token, spreadsheetId, result);
         }
       }
+      // If we succeed, we can clear any pending sync for this result
+      localStorage.removeItem(`pending_sync_${result.id}`);
     } catch (err: any) {
       console.error("Syncing submission to Sheets failed:", err);
-      setSyncResultError(err.message || "Không thể đồng bộ kết quả thi lên Google Sheets.");
+      // Back up to LocalStorage with pending_sync state so progress is never lost!
+      try {
+        localStorage.setItem(`pending_sync_${result.id}`, JSON.stringify({ result, isStudentMode, spreadsheetId }));
+      } catch (storageErr) {
+        console.error("Failed to back up submission to localStorage:", storageErr);
+      }
+      setSyncResultError(
+        `${err.message || "Không thể kết nối mạng."} Bài thi của bạn đã được bảo lưu an toàn cục bộ trên trình duyệt. Bạn có thể nhấn 'Thử gửi lại' hoặc chờ có mạng lại.`
+      );
     } finally {
       setIsSyncingResult(false);
+    }
+  };
+
+  const handleRetrySync = async () => {
+    if (lastResult) {
+      await syncResultToSheets(lastResult);
     }
   };
 
@@ -933,6 +981,7 @@ export default function App() {
               setIsStudentMode(false);
               window.history.replaceState({}, document.title, window.location.pathname);
             }}
+            onRetrySync={handleRetrySync}
           />
         )}
 

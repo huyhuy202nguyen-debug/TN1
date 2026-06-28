@@ -74,6 +74,7 @@ async function initializeSheetHeaders(accessToken: string, spreadsheetId: string
     "Thời Gian Nộp Bài",
     "Họ và Tên Học Sinh",
     "Lớp",
+    "Mã Bài Thi (ID)",
     "Tên Bài Thi",
     "Điểm Số (Thang 10)",
     "Số Câu Đúng",
@@ -356,25 +357,48 @@ export async function appendResultToSheet(accessToken: string, spreadsheetId: st
 
   // Append individual answers for each question to support statistics
   result.detailedGrades.forEach(g => {
-    row.push(g.studentAnswers.join(", "));
+    if (g.questionType === "case_study") {
+      row.push(g.studentAnswers.join(" | "));
+    } else {
+      row.push(g.studentAnswers.join(", "));
+    }
   });
 
-  const response = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        values: [row],
-      }),
-    }
-  );
+  const makeRequest = async () => {
+    const response = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          values: [row],
+        }),
+      }
+    );
 
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+    }
+  };
+
+  // Retry up to 3 times with 1.5s interval
+  let lastError: any = null;
+  for (let i = 0; i < 3; i++) {
+    try {
+      await makeRequest();
+      return; // Success!
+    } catch (err) {
+      lastError = err;
+      if (i < 2) {
+        console.warn(`Retry ${i + 1}/3 appending result to sheet due to:`, err);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
   }
+
+  throw lastError || new Error("Không thể đồng bộ kết quả thi lên Google Sheets sau 3 lần thử.");
 }

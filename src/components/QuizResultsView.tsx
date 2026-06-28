@@ -11,6 +11,7 @@ interface QuizResultsViewProps {
   spreadsheetId: string | null;
   isStudentMode?: boolean;
   onBackToHome: () => void;
+  onRetrySync?: () => void;
 }
 
 export default function QuizResultsView({
@@ -21,6 +22,7 @@ export default function QuizResultsView({
   spreadsheetId,
   isStudentMode = false,
   onBackToHome,
+  onRetrySync,
 }: QuizResultsViewProps) {
   const getScoreColor = (score: number) => {
     if (score >= 8.0) return "text-emerald-600 bg-emerald-50 border-emerald-100";
@@ -92,8 +94,18 @@ export default function QuizResultsView({
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang gửi kết quả về máy chủ...
               </div>
             ) : syncError ? (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 font-medium">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Gửi kết quả thất bại: {syncError}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 font-medium">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Gửi kết quả thất bại: {syncError}
+                </div>
+                {onRetrySync && (
+                  <button
+                    onClick={onRetrySync}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-semibold shadow transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3 animate-pulse" /> Thử gửi lại
+                  </button>
+                )}
               </div>
             ) : (
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-100 rounded-xl text-xs text-emerald-700 font-medium">
@@ -106,8 +118,18 @@ export default function QuizResultsView({
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Đang đồng bộ kết quả thi lên Google Sheets...
               </div>
             ) : syncError ? (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 font-medium">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Đồng bộ thất bại: {syncError}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 border border-rose-100 rounded-xl text-xs text-rose-700 font-medium">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Đồng bộ thất bại: {syncError}
+                </div>
+                {onRetrySync && (
+                  <button
+                    onClick={onRetrySync}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-semibold shadow transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3 animate-pulse" /> Thử gửi lại
+                  </button>
+                )}
               </div>
             ) : (
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 border border-emerald-100 rounded-xl text-xs text-emerald-700 font-medium">

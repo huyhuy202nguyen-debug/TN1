@@ -261,6 +261,53 @@ app.delete("/api/shared-quiz/:id", async (req, res) => {
   }
 });
 
+// 6.1. API: Refresh Google Access Token securely
+app.post("/api/refresh-token", async (req, res) => {
+  const { refreshToken } = req.body;
+
+  if (!refreshToken) {
+    return res.status(400).json({ error: "Thiếu Refresh Token." });
+  }
+
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      return res.status(500).json({ 
+        error: "Ứng dụng chưa được cấu hình GOOGLE_CLIENT_ID hoặc GOOGLE_CLIENT_SECRET trên server. Hãy cấu hình chúng trong phần Cài đặt bí mật." 
+      });
+    }
+
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }).toString(),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error_description || data.error || "Không thể làm mới token.");
+    }
+
+    res.json({
+      accessToken: data.access_token,
+      expiresIn: data.expires_in,
+    });
+  } catch (error: any) {
+    console.error("Lỗi khi làm mới Google Access Token:", error);
+    res.status(500).json({ error: error.message || "Lỗi khi gia hạn Token." });
+  }
+});
+
 // 5. API: Submit a quiz result directly to the teacher's Google Sheet
 app.post("/api/submit-quiz/:id", async (req, res) => {
   if (!db) {
@@ -301,6 +348,8 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
     const row = [
       result.submittedAt,
       result.studentName,
+      result.studentClass || "",
+      result.quizId,
       result.quizTitle,
       result.score.toFixed(1),
       result.correctCount,
@@ -308,23 +357,55 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
       detailSummary,
     ];
 
-    const response = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:G")}:append?valueInputOption=USER_ENTERED`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          values: [row],
-        }),
+    // Append individual answers for each question to support statistics
+    result.detailedGrades.forEach((g: any) => {
+      if (g.questionType === "case_study") {
+        row.push(g.studentAnswers.join(" | "));
+      } else {
+        row.push(g.studentAnswers.join(", "));
       }
-    );
+    });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+    const makeRequest = async () => {
+      const response = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            values: [row],
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+      }
+    };
+
+    // Retry up to 3 times with 1.5s interval
+    let lastError: any = null;
+    let success = false;
+    for (let i = 0; i < 3; i++) {
+      try {
+        await makeRequest();
+        success = true;
+        break;
+      } catch (err) {
+        lastError = err;
+        if (i < 2) {
+          console.warn(`Retry ${i + 1}/3 backend append due to:`, err);
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+    }
+
+    if (!success) {
+      throw lastError || new Error("Không thể đồng bộ kết quả thi lên Google Sheets sau 3 lần thử.");
     }
 
     res.json({ success: true });

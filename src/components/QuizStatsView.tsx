@@ -73,6 +73,67 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
     loadStats();
   }, [quiz.id, spreadsheetId]);
 
+  // Helper to determine if a specific question submission was completely correct
+  const isQuestionSubmissionCorrect = (q: any, rawAns: string) => {
+    if (!rawAns) return false;
+    const studentAns = q.questionType === "case_study" ? rawAns.split(" | ") : rawAns.split(", ");
+    const correctAnswers = q.correctAnswers || [];
+    
+    if (q.questionType === "case_study") {
+      const subGrades = (q.subQuestions || []).map((subQ: any, sIdx: number) => {
+        const subRawAns = studentAns[sIdx] || "";
+        const subStudentAns = subRawAns && subRawAns !== "(Trống)" ? subRawAns.split(", ") : [];
+        const subCorrectAnswers = subQ.correctAnswers || [];
+        
+        if (subQ.questionType === "single" || subQ.questionType === "true_false") {
+          return (
+            subStudentAns.length === 1 &&
+            subCorrectAnswers.length === 1 &&
+            subStudentAns[0].toLowerCase().trim() === subCorrectAnswers[0].toLowerCase().trim()
+          );
+        } else if (subQ.questionType === "multiple") {
+          const sortedStudent = [...subStudentAns].sort();
+          const sortedCorrect = [...subCorrectAnswers].sort();
+          return (
+            sortedStudent.length === sortedCorrect.length &&
+            sortedStudent.every((val, idx) => val.toLowerCase().trim() === sortedCorrect[idx].toLowerCase().trim())
+          );
+        } else if (subQ.questionType === "short_answer") {
+          return (
+            subStudentAns.length === 1 &&
+            subCorrectAnswers.some((ans: string) => ans.toLowerCase().trim() === subStudentAns[0].toLowerCase().trim())
+          );
+        }
+        return false;
+      });
+      return subGrades.every(sg => sg === true);
+    } else if (q.questionType === "single" || q.questionType === "true_false") {
+      return (
+        studentAns.length === 1 &&
+        correctAnswers.length === 1 &&
+        studentAns[0].toLowerCase().trim() === correctAnswers[0].toLowerCase().trim()
+      );
+    } else if (q.questionType === "multiple") {
+      const sortedStudent = studentAns.map((v: string) => v.toLowerCase().trim()).sort();
+      const sortedCorrect = correctAnswers.map((v: string) => v.toLowerCase().trim()).sort();
+      return (
+        sortedStudent.length === sortedCorrect.length &&
+        sortedStudent.every((val, idx) => val === sortedCorrect[idx])
+      );
+    } else if (q.questionType === "true_false_cluster") {
+      return (
+        studentAns.length === correctAnswers.length &&
+        studentAns.every((ans, i) => ans.toLowerCase().trim() === correctAnswers[i].toLowerCase().trim())
+      );
+    } else if (q.questionType === "short_answer") {
+      return (
+        studentAns.length === 1 &&
+        correctAnswers.some((ans: string) => ans.toLowerCase().trim() === studentAns[0].toLowerCase().trim())
+      );
+    }
+    return false;
+  };
+
   // Calculate statistics for each question
   const calculateQuestionStats = (qIndex: number) => {
      const question = quiz.questions[qIndex];
@@ -87,8 +148,7 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
         const ans = rawAns || "(Trống)";
         breakdown[ans] = (breakdown[ans] || 0) + 1;
         
-        const correctAnswers = question.correctAnswers.join(", ");
-        if (ans === correctAnswers) {
+        if (isQuestionSubmissionCorrect(question, rawAns)) {
            correctCount++;
         }
      });
@@ -116,26 +176,66 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
   const getDetailedGradesForSelected = () => {
     if (!selectedSubmission) return [];
     
-    return quiz.questions.map((q, idx) => {
+    return quiz.questions.filter(Boolean).map((q, idx) => {
       const rawAns = selectedSubmission.questionAnswers[idx];
-      const studentAns = rawAns ? rawAns.split(", ") : [];
+      const studentAns = rawAns ? (q.questionType === "case_study" ? rawAns.split(" | ") : rawAns.split(", ")) : [];
+      const correctAnswers = q.correctAnswers || [];
+      const options = q.options || [];
       
       let isCorrect = false;
-      if (q.questionType === "single" || q.questionType === "true_false") {
+      let subGrades: any[] = [];
+
+      if (q.questionType === "case_study") {
+        subGrades = (q.subQuestions || []).map((subQ, sIdx) => {
+          const subRawAns = studentAns[sIdx] || "";
+          const subStudentAns = subRawAns && subRawAns !== "(Trống)" ? subRawAns.split(", ") : [];
+          const subCorrectAnswers = subQ.correctAnswers || [];
+          
+          let subIsCorrect = false;
+          if (subQ.questionType === "single" || subQ.questionType === "true_false") {
+            subIsCorrect =
+              subStudentAns.length === 1 &&
+              subCorrectAnswers.length === 1 &&
+              subStudentAns[0].toLowerCase().trim() === subCorrectAnswers[0].toLowerCase().trim();
+          } else if (subQ.questionType === "multiple") {
+            const sortedStudent = [...subStudentAns].sort();
+            const sortedCorrect = [...subCorrectAnswers].sort();
+            subIsCorrect =
+              sortedStudent.length === sortedCorrect.length &&
+              sortedStudent.every((val, idx) => val.toLowerCase().trim() === sortedCorrect[idx].toLowerCase().trim());
+          } else if (subQ.questionType === "short_answer") {
+            subIsCorrect =
+              subStudentAns.length === 1 &&
+              subCorrectAnswers.some((ans) => ans.toLowerCase().trim() === subStudentAns[0].toLowerCase().trim());
+          }
+
+          return {
+            questionId: subQ.id,
+            questionText: subQ.questionText,
+            questionType: subQ.questionType,
+            isCorrect: subIsCorrect,
+            studentAnswers: subStudentAns,
+            correctAnswers: subCorrectAnswers,
+            options: subQ.options || [],
+            explanation: subQ.explanation || "",
+          };
+        });
+        isCorrect = subGrades.every(sg => sg.isCorrect);
+      } else if (q.questionType === "single" || q.questionType === "true_false") {
         isCorrect =
           studentAns.length === 1 &&
-          q.correctAnswers.length === 1 &&
-          studentAns[0] === q.correctAnswers[0];
+          correctAnswers.length === 1 &&
+          studentAns[0] === correctAnswers[0];
       } else if (q.questionType === "multiple") {
         isCorrect =
-          studentAns.length === q.correctAnswers.length &&
-          studentAns.every((ans) => q.correctAnswers.includes(ans));
+          studentAns.length === correctAnswers.length &&
+          studentAns.every((ans) => correctAnswers.includes(ans));
       } else if (q.questionType === "true_false_cluster") {
         isCorrect =
-          studentAns.length === q.correctAnswers.length &&
-          studentAns.every((ans, i) => ans === q.correctAnswers[i]);
+          studentAns.length === correctAnswers.length &&
+          studentAns.every((ans, i) => ans === correctAnswers[i]);
       } else {
-        isCorrect = studentAns.join(", ") === q.correctAnswers.join(", ");
+        isCorrect = studentAns.join(", ") === correctAnswers.join(", ");
       }
 
       return {
@@ -144,10 +244,11 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
         questionType: q.questionType,
         isCorrect,
         studentAnswers: studentAns,
-        correctAnswers: q.correctAnswers,
-        options: q.options,
-        explanation: q.explanation,
+        correctAnswers,
+        options,
+        explanation: q.explanation || "",
         imageUrl: q.imageUrl,
+        subGrades,
       };
     });
   };
@@ -381,7 +482,7 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
                            )}
 
                            {/* Options list */}
-                           {grade.options.length > 0 && grade.questionType !== "true_false_cluster" && (
+                           {grade.options.length > 0 && grade.questionType !== "true_false_cluster" && grade.questionType !== "case_study" && (
                              <div className="flex flex-col gap-2 mb-4">
                                {grade.options.map((opt, i) => {
                                  const isStudentChoice = grade.studentAnswers.includes(opt);
@@ -404,7 +505,7 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
                            )}
 
                            {/* True False Cluster Layout */}
-                           {grade.questionType === "true_false_cluster" && grade.options.length > 0 ? (
+                           {grade.questionType !== "case_study" && grade.questionType === "true_false_cluster" && grade.options.length > 0 ? (
                              <div className="space-y-2 mb-4">
                                {grade.options.map((opt, i) => {
                                  const stAns = grade.studentAnswers[i];
@@ -429,7 +530,7 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
                                  );
                                })}
                              </div>
-                           ) : (
+                           ) : grade.questionType !== "case_study" ? (
                              /* Default answers display */
                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                                <div className="bg-slate-50 border border-slate-100 rounded-xl p-3">
@@ -446,7 +547,7 @@ export default function QuizStatsView({ quiz, spreadsheetId, onBack }: QuizStats
                                  </p>
                                </div>
                              </div>
-                           )}
+                           ) : null}
 
                            {/* Explanation */}
                            {grade.explanation && (

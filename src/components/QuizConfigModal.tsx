@@ -134,7 +134,7 @@ export default function QuizConfigModal({ quiz, onSave, onClose }: QuizConfigMod
                   className="accent-indigo-600 w-4 h-4 rounded"
                 />
                 Thi theo phần (Phân nhóm câu hỏi theo loại)
-                <span className="text-xs text-slate-400 font-normal ml-2">Phần trắc nghiệm, nhiều đáp án, đúng/sai, trả lời ngắn được phân biệt, không trộn lẫn</span>
+                <span className="text-xs text-slate-400 font-normal ml-2">Phần trắc nghiệm, nhiều đáp án, đúng/sai, trả lời ngắn, câu hỏi chùm được phân biệt, không trộn lẫn</span>
               </label>
             </div>
           </div>
