@@ -285,6 +285,10 @@ app.get("/api/get-shared-quiz/:id", async (req, res) => {
     }
     
     // We only send the quiz data back to the student, NO credentials exist in this collection anyway!
+    
+    // Asynchronously trigger background sync for any pending submissions
+    triggerBackgroundSync(shortId).catch(err => console.error("Background sync error:", err));
+    
     res.json({ success: true, quiz: data.quiz });
   } catch (error: any) {
     console.error("Error fetching shared quiz:", error);
@@ -346,6 +350,167 @@ async function refreshGoogleAccessToken(refreshToken: string): Promise<string | 
   }
 }
 
+// Core helper for writing to Google Sheets
+async function appendResultToGoogleSheets(token: string, spreadsheetId: string, result: any): Promise<boolean> {
+  const RESULT_SHEET = "Kết quả thi";
+  const detailSummary = result.detailedGrades
+    .map((g: any, idx: number) => {
+      const status = g.isCorrect ? "Đúng" : "Sai";
+      return `${idx + 1}. [${status}] Đã chọn: ${g.studentAnswers.join(", ")} | Đáp án đúng: ${g.correctAnswers.join(", ")}`;
+    })
+    .join("\n");
+
+  let headers: string[] = [];
+  try {
+    const getHeadersRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (getHeadersRes.ok) {
+      const headerData: any = await getHeadersRes.json();
+      if (headerData.values && headerData.values[0] && headerData.values[0].length > 0) {
+        headers = headerData.values[0];
+      }
+    } else if (getHeadersRes.status === 401) {
+      throw { status: 401, message: "Unauthorized" };
+    }
+  } catch (e: any) {
+    if (e.status === 401) throw e;
+    console.error("Failed to fetch existing headers from Google Sheets on backend:", e);
+  }
+
+  if (headers.length === 0) {
+    headers = [
+      "Thời Gian Nộp Bài",
+      "Họ và Tên Học Sinh",
+      "Lớp",
+      "Mã Bài Thi (ID)",
+      "Tên Bài Thi",
+      "Điểm Số (Thang 10)",
+      "Số Câu Đúng",
+      "Tổng Số Câu Hỏi",
+      "Chi Tiết Đáp Án",
+    ];
+    for (let i = 1; i <= Math.max(150, result.detailedGrades.length); i++) {
+      headers.push(`Câu ${i}`);
+    }
+    try {
+      const setHeadersRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}?valueInputOption=USER_ENTERED`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ values: [headers] }),
+        }
+      );
+      if (!setHeadersRes.ok && setHeadersRes.status === 401) {
+        throw { status: 401, message: "Unauthorized" };
+      }
+    } catch (e: any) {
+      if (e.status === 401) throw e;
+      console.error("Failed to write backend fallback headers:", e);
+    }
+  }
+
+  const row = headers.map((headerName: string) => {
+    const norm = headerName.trim().toLowerCase();
+    
+    if (norm.includes("thời gian")) return result.submittedAt || "";
+    if (norm.includes("họ và tên") || norm.includes("học sinh") || norm.includes("tên học sinh")) return result.studentName || "";
+    if (norm.includes("lớp")) return result.studentClass || "";
+    if (norm.includes("mã bài thi") || norm.includes("mã đề")) return result.quizId || "";
+    if (norm.includes("tên bài thi") || norm.includes("tiêu đề") || norm.includes("tên đề")) return result.quizTitle || "";
+    if (norm.includes("điểm") || norm.includes("score")) return typeof result.score === "number" ? result.score.toFixed(1) : String(result.score || "0.0");
+    if (norm.includes("số câu đúng") || norm.includes("câu đúng")) return result.correctCount !== undefined ? result.correctCount : 0;
+    if (norm.includes("tổng số câu") || norm.includes("tổng câu")) return result.totalQuestions !== undefined ? result.totalQuestions : 0;
+    if (norm.includes("chi tiết đáp án") || norm.includes("chi tiết")) return detailSummary || "";
+    
+    const questionMatch = norm.match(/câu\s*(\d+)/);
+    if (questionMatch) {
+      const qNum = parseInt(questionMatch[1], 10);
+      const grade = result.detailedGrades && result.detailedGrades[qNum - 1];
+      if (grade && grade.studentAnswers) {
+        return grade.questionType === "case_study" ? grade.studentAnswers.join(" | ") : grade.studentAnswers.join(", ");
+      }
+    }
+    return "";
+  });
+
+  const appendRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ values: [row] }),
+    }
+  );
+
+  if (!appendRes.ok) {
+    if (appendRes.status === 401) {
+      throw { status: 401, message: "Unauthorized" };
+    }
+    const errorData = await appendRes.json();
+    throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+  }
+
+  return true;
+}
+
+// Background Task: Auto sync pending submissions
+async function triggerBackgroundSync(shortId: string) {
+  if (!adminDb) return;
+  try {
+    const submissionsRef = adminDb.collection("sharedQuizzes").doc(shortId).collection("submissions");
+    const querySnapshot = await submissionsRef.where("synced", "==", false).get();
+    if (querySnapshot.empty) return; // No pending submissions
+    
+    const tokenDoc = await adminDb.collection("quizTokens").doc(shortId).get();
+    if (!tokenDoc.exists) return;
+    
+    const tokenData = tokenDoc.data() || {};
+    let activeAccessToken = tokenData.accessToken;
+    const refreshToken = tokenData.refreshToken;
+    const spreadsheetId = tokenData.spreadsheetId;
+    
+    if (!activeAccessToken || !spreadsheetId) return;
+
+    for (const doc of querySnapshot.docs) {
+      const submission = doc.data();
+      let writeSuccess = false;
+      try {
+        writeSuccess = await appendResultToGoogleSheets(activeAccessToken, spreadsheetId, submission.result);
+      } catch (writeErr: any) {
+        if (writeErr.status === 401 && refreshToken) {
+          const newAccessToken = await refreshGoogleAccessToken(refreshToken);
+          if (newAccessToken) {
+            await adminDb.collection("quizTokens").doc(shortId).update({ accessToken: newAccessToken });
+            activeAccessToken = newAccessToken; // Cập nhật token để dùng cho các bài tiếp theo
+            writeSuccess = await appendResultToGoogleSheets(newAccessToken, spreadsheetId, submission.result);
+          } else {
+            console.warn(`[BackgroundSync] Failed to refresh token for quiz ${shortId}`);
+            break; // Dừng lại vì không thể refresh token
+          }
+        } else {
+          console.error(`[BackgroundSync] Failed to append result ${doc.id}:`, writeErr);
+        }
+      }
+      
+      if (writeSuccess) {
+        await submissionsRef.doc(doc.id).update({ synced: true });
+        console.log(`[BackgroundSync] Successfully synced background submission ${doc.id}`);
+      }
+    }
+  } catch (err) {
+    console.error(`[BackgroundSync] Error syncing pending submissions for ${shortId}:`, err);
+  }
+}
+
 // 5. API: Submit a quiz result directly to the teacher's Google Sheet
 app.post("/api/submit-quiz/:id", async (req, res) => {
   if (!adminDb) {
@@ -401,156 +566,13 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
   }
 
   // Khai báo hàm thực hiện ghi dữ liệu lên Google Sheets bằng một accessToken cụ thể
-  const writeToGoogleSheets = async (token: string): Promise<boolean> => {
-    const RESULT_SHEET = "Kết quả thi";
-    const detailSummary = result.detailedGrades
-      .map((g: any, idx: number) => {
-        const status = g.isCorrect ? "Đúng" : "Sai";
-        return `${idx + 1}. [${status}] Đã chọn: ${g.studentAnswers.join(", ")} | Đáp án đúng: ${g.correctAnswers.join(", ")}`;
-      })
-      .join("\n");
-
-    // Fetch current headers to align columns dynamically
-    let headers: string[] = [];
-    try {
-      const getHeadersRes = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-      if (getHeadersRes.ok) {
-        const headerData: any = await getHeadersRes.json();
-        if (headerData.values && headerData.values[0] && headerData.values[0].length > 0) {
-          headers = headerData.values[0];
-        }
-      } else if (getHeadersRes.status === 401) {
-        throw { status: 401, message: "Unauthorized" };
-      }
-    } catch (e: any) {
-      if (e.status === 401) throw e;
-      console.error("Failed to fetch existing headers from Google Sheets on backend:", e);
-    }
-
-    // If no headers exist, initialize them with defaults
-    if (headers.length === 0) {
-      headers = [
-        "Thời Gian Nộp Bài",
-        "Họ và Tên Học Sinh",
-        "Lớp",
-        "Mã Bài Thi (ID)",
-        "Tên Bài Thi",
-        "Điểm Số (Thang 10)",
-        "Số Câu Đúng",
-        "Tổng Số Câu Hỏi",
-        "Chi Tiết Đáp Án",
-      ];
-      for (let i = 1; i <= Math.max(150, result.detailedGrades.length); i++) {
-        headers.push(`Câu ${i}`);
-      }
-      try {
-        const setHeadersRes = await fetch(
-          `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}?valueInputOption=USER_ENTERED`,
-          {
-            method: "PUT",
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              values: [headers],
-            }),
-          }
-        );
-        if (!setHeadersRes.ok && setHeadersRes.status === 401) {
-          throw { status: 401, message: "Unauthorized" };
-        }
-      } catch (e: any) {
-        if (e.status === 401) throw e;
-        console.error("Failed to write backend fallback headers:", e);
-      }
-    }
-
-    // Map fields dynamically to matching column positions based on actual headers in the sheet
-    const row = headers.map((headerName: string) => {
-      const norm = headerName.trim().toLowerCase();
-      
-      if (norm.includes("thời gian")) {
-        return result.submittedAt || "";
-      }
-      if (norm.includes("họ và tên") || norm.includes("học sinh") || norm.includes("tên học sinh")) {
-        return result.studentName || "";
-      }
-      if (norm.includes("lớp")) {
-        return result.studentClass || "";
-      }
-      if (norm.includes("mã bài thi") || norm.includes("mã đề")) {
-        return result.quizId || "";
-      }
-      if (norm.includes("tên bài thi") || norm.includes("tiêu đề") || norm.includes("tên đề")) {
-        return result.quizTitle || "";
-      }
-      if (norm.includes("điểm") || norm.includes("score")) {
-        return typeof result.score === "number" ? result.score.toFixed(1) : String(result.score || "0.0");
-      }
-      if (norm.includes("số câu đúng") || norm.includes("câu đúng")) {
-        return result.correctCount !== undefined ? result.correctCount : 0;
-      }
-      if (norm.includes("tổng số câu") || norm.includes("tổng câu")) {
-        return result.totalQuestions !== undefined ? result.totalQuestions : 0;
-      }
-      if (norm.includes("chi tiết đáp án") || norm.includes("chi tiết")) {
-        return detailSummary || "";
-      }
-      
-      // Match "Câu X" (e.g., "Câu 1", "Câu 2", ...)
-      const questionMatch = norm.match(/câu\s*(\d+)/);
-      if (questionMatch) {
-        const qNum = parseInt(questionMatch[1], 10);
-        const grade = result.detailedGrades && result.detailedGrades[qNum - 1];
-        if (grade) {
-          if (grade.studentAnswers) {
-            if (grade.questionType === "case_study") {
-              return grade.studentAnswers.join(" | ");
-            } else {
-              return grade.studentAnswers.join(", ");
-            }
-          }
-        }
-      }
-      return "";
-    });
-
-    const appendRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          values: [row],
-        }),
-      }
-    );
-
-    if (!appendRes.ok) {
-      if (appendRes.status === 401) {
-        throw { status: 401, message: "Unauthorized" };
-      }
-      const errorData = await appendRes.json();
-      throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
-    }
-
-    return true;
-  };
+  // Gọi hàm appendResultToGoogleSheets (đã refactor lên global function)
 
   // Tiến hành ghi dữ liệu
   try {
     let writeSuccess = false;
     try {
-      writeSuccess = await writeToGoogleSheets(activeAccessToken);
+      writeSuccess = await appendResultToGoogleSheets(activeAccessToken, spreadsheetId, result);
     } catch (writeErr: any) {
       // 2. Nếu lỗi do Token hết hạn (401), và giáo viên có cấu hình refreshToken
       if (writeErr.status === 401 && refreshToken) {
@@ -569,7 +591,7 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
 
           // Thử ghi lại một lần nữa bằng access token mới
           console.log("Retrying sheet append with new access token...");
-          writeSuccess = await writeToGoogleSheets(newAccessToken);
+          writeSuccess = await appendResultToGoogleSheets(newAccessToken, spreadsheetId, result);
         } else {
           console.warn("Failed to refresh Google access token. Proceeding to background sync flow.");
           throw writeErr;
@@ -586,6 +608,10 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
       } catch (dbErr) {
         console.error("Failed to update submission sync state:", dbErr);
       }
+      
+      // Asynchronously trigger background sync for any OTHER pending submissions
+      triggerBackgroundSync(shortId).catch(err => console.error("Background sync error:", err));
+      
       return res.json({ success: true, pendingSync: false });
     } else {
       throw new Error("Lưu kết quả lên Google Sheets không thành công.");
@@ -596,6 +622,10 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
     // 4. Nếu có lỗi xảy ra hoặc token bị lỗi mà không thể tự làm mới,
     // chúng ta vẫn trả về success cho học sinh để các em không lo lắng,
     // và thông báo kết quả sẽ đồng bộ sau khi giáo viên trực tiếp mở app.
+    
+    // Asynchronously trigger background sync anyway (just in case)
+    triggerBackgroundSync(shortId).catch(err => console.error("Background sync error:", err));
+    
     return res.json({ 
       success: true, 
       pendingSync: true, 
