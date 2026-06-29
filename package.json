@@ -17,6 +17,7 @@
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "firebase": "^12.15.0",
+    "firebase-admin": "^14.1.0",
     "katex": "^0.17.0",
     "lucide-react": "^0.546.0",
     "lz-string": "^1.5.0",

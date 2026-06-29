@@ -12,9 +12,10 @@ provider.addScope("https://www.googleapis.com/auth/drive.file");
 provider.addScope("https://www.googleapis.com/auth/userinfo.email");
 provider.addScope("https://www.googleapis.com/auth/userinfo.profile");
 
-// Prompt for account selection but don't force consent screen on every login
+// Prompt for offline access and consent to obtain Google OAuth Refresh Token
 provider.setCustomParameters({
-  prompt: "select_account"
+  prompt: "consent",
+  access_type: "offline"
 });
 
 let isSigningIn = false;
@@ -75,8 +76,8 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     localStorage.setItem("gapi_access_token", token);
     localStorage.setItem("gapi_token_timestamp", Date.now().toString());
 
-    // Extract Refresh Token from Google Auth result
-    const refreshToken = (result as any)._tokenResponse?.refreshToken;
+    // Extract Google OAuth Refresh Token from Google Auth result
+    const refreshToken = (result as any)._tokenResponse?.oauthRefreshToken;
     if (refreshToken) {
       localStorage.setItem("gapi_refresh_token", refreshToken);
     }
@@ -95,6 +96,10 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 
 export const getAccessToken = (): string | null => {
   return cachedAccessToken;
+};
+
+export const getRefreshToken = (): string | null => {
+  return localStorage.getItem("gapi_refresh_token") || (window as any).__google_oauth_refresh_token || null;
 };
 
 export const logout = async () => {

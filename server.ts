@@ -13,24 +13,42 @@ const PORT = 3000;
 app.use(express.json({ limit: "15mb" }));
 
 import fs from "fs";
-import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, getDoc, deleteDoc } from "firebase/firestore";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getFirestore, Firestore } from "firebase-admin/firestore";
 
-// Initialize Firebase using the generated config
-let db: any = null;
+// Initialize Firebase Admin using the generated config
+let adminDb: Firestore | null = null;
 try {
   const firebaseConfigPath = path.join(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(firebaseConfigPath)) {
     const firebaseConfig = JSON.parse(fs.readFileSync(firebaseConfigPath, "utf-8"));
-    const firebaseApp = initializeApp(firebaseConfig);
-    // CRITICAL: Must use the specific database ID from config
-    db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
-    console.log("Firebase initialized successfully on the server.");
+    
+    let app;
+    if (getApps().length === 0) {
+      app = initializeApp({
+        projectId: firebaseConfig.projectId,
+      });
+    } else {
+      app = getApps()[0];
+    }
+
+    const dbId = firebaseConfig.firestoreDatabaseId;
+    if (dbId && dbId !== "(default)") {
+      try {
+        adminDb = getFirestore(app, dbId);
+      } catch (e) {
+        console.warn("Failed to initialize admin firestore with specific databaseId, falling back to default:", e);
+        adminDb = getFirestore(app);
+      }
+    } else {
+      adminDb = getFirestore(app);
+    }
+    console.log("Firebase Admin initialized successfully on the server.");
   } else {
-    console.warn("firebase-applet-config.json not found. Firestore will not be available.");
+    console.warn("firebase-applet-config.json not found. Firestore Admin will not be available.");
   }
 } catch (err) {
-  console.error("Failed to initialize Firebase:", err);
+  console.error("Failed to initialize Firebase Admin:", err);
 }
 
 // Initialize Google GenAI client lazily
@@ -194,9 +212,9 @@ Yêu cầu đề thi:
   }
 });
 
-// 3. API: Create a shared quiz link (stores quiz + teacher's token in Firestore)
+// 3. API: Create a shared quiz link (stores quiz in public Firestore, and teacher's token in secure private collection)
 app.post("/api/share-quiz", async (req, res) => {
-  const { quiz, accessToken, spreadsheetId } = req.body;
+  const { quiz, accessToken, refreshToken, spreadsheetId } = req.body;
   if (!quiz) {
     return res.status(400).json({ error: "Thiếu thông tin bài thi." });
   }
@@ -207,17 +225,40 @@ app.post("/api/share-quiz", async (req, res) => {
   // Ensure quiz object has the publishedId
   const quizToSave = { ...quiz, publishedId: shortId };
   
-  if (!db) {
+  if (!adminDb) {
     return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình trên máy chủ." });
   }
 
   try {
-    await setDoc(doc(db, "sharedQuizzes", shortId), {
+    // 1. Save public quiz content (completely separate from credentials)
+    const quizDocRef = adminDb.collection("sharedQuizzes").doc(shortId);
+    await quizDocRef.set({
       quiz: quizToSave,
-      accessToken: accessToken || null,
-      spreadsheetId: spreadsheetId || null,
       createdAt: Date.now()
     });
+
+    // 2. Fetch existing tokens if any to avoid overwriting with empty parameters
+    const tokensDocRef = adminDb.collection("quizTokens").doc(shortId);
+    let existingTokens: any = {};
+    try {
+      const tokensSnap = await tokensDocRef.get();
+      if (tokensSnap.exists) {
+        existingTokens = tokensSnap.data() || {};
+      }
+    } catch (e) {
+      // Ignore
+    }
+
+    const finalRefreshToken = refreshToken || existingTokens.refreshToken || null;
+
+    // 3. Save tokens into the secure private "quizTokens" collection (never accessible to the client)
+    await tokensDocRef.set({
+      accessToken: accessToken || existingTokens.accessToken || null,
+      refreshToken: finalRefreshToken,
+      spreadsheetId: spreadsheetId || existingTokens.spreadsheetId || null,
+      createdAt: Date.now()
+    });
+
     res.json({ success: true, shortId });
   } catch (error: any) {
     console.error("Error saving shared quiz to Firestore:", error);
@@ -227,18 +268,23 @@ app.post("/api/share-quiz", async (req, res) => {
 
 // 4. API: Retrieve a shared quiz by short ID
 app.get("/api/get-shared-quiz/:id", async (req, res) => {
-  if (!db) {
+  if (!adminDb) {
     return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
   }
 
   try {
-    const docSnap = await getDoc(doc(db, "sharedQuizzes", req.params.id.toUpperCase()));
-    if (!docSnap.exists()) {
+    const shortId = req.params.id.toUpperCase();
+    const docSnap = await adminDb.collection("sharedQuizzes").doc(shortId).get();
+    if (!docSnap.exists) {
       return res.status(404).json({ error: "Không tìm thấy bài thi hoặc bài thi đã hết hạn." });
     }
     
     const data = docSnap.data();
-    // We only send the quiz data back to the student, NEVER the accessToken!
+    if (!data || !data.quiz) {
+      return res.status(404).json({ error: "Dữ liệu bài thi không hợp lệ." });
+    }
+    
+    // We only send the quiz data back to the student, NO credentials exist in this collection anyway!
     res.json({ success: true, quiz: data.quiz });
   } catch (error: any) {
     console.error("Error fetching shared quiz:", error);
@@ -248,12 +294,15 @@ app.get("/api/get-shared-quiz/:id", async (req, res) => {
 
 // 6. API: Delete a shared quiz
 app.delete("/api/shared-quiz/:id", async (req, res) => {
-  if (!db) {
+  if (!adminDb) {
     return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
   }
 
   try {
-    await deleteDoc(doc(db, "sharedQuizzes", req.params.id.toUpperCase()));
+    const shortId = req.params.id.toUpperCase();
+    // Delete both public quiz and private secure tokens
+    await adminDb.collection("sharedQuizzes").doc(shortId).delete();
+    await adminDb.collection("quizTokens").doc(shortId).delete();
     res.json({ success: true });
   } catch (error: any) {
     console.error("Error deleting shared quiz:", error);
@@ -261,36 +310,99 @@ app.delete("/api/shared-quiz/:id", async (req, res) => {
   }
 });
 
+// Helper function to refresh Google access token using refresh token
+async function refreshGoogleAccessToken(refreshToken: string): Promise<string | null> {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  
+  if (!clientId || !clientSecret) {
+    console.warn("GOOGLE_CLIENT_ID hoặc GOOGLE_CLIENT_SECRET chưa được cấu hình trên server. Bỏ qua tự động refresh token.");
+    return null;
+  }
+
+  try {
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token"
+      })
+    });
+
+    if (res.ok) {
+      const data: any = await res.json();
+      return data.access_token || null;
+    } else {
+      const errText = await res.text();
+      console.error("Failed to refresh Google access token:", errText);
+      return null;
+    }
+  } catch (error) {
+    console.error("Error refreshing Google access token:", error);
+    return null;
+  }
+}
+
 // 5. API: Submit a quiz result directly to the teacher's Google Sheet
 app.post("/api/submit-quiz/:id", async (req, res) => {
-  if (!db) {
+  if (!adminDb) {
     return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
   }
 
-  let data;
+  const shortId = req.params.id.toUpperCase();
   try {
-    const docSnap = await getDoc(doc(db, "sharedQuizzes", req.params.id.toUpperCase()));
-    if (!docSnap.exists()) {
+    const docSnap = await adminDb.collection("sharedQuizzes").doc(shortId).get();
+    if (!docSnap.exists) {
       return res.status(404).json({ error: "Không tìm thấy phiên làm bài (hoặc đã hết hạn)." });
     }
-    data = docSnap.data();
   } catch (error: any) {
     console.error("Error fetching shared quiz for submission:", error);
     return res.status(500).json({ error: "Lỗi kết nối cơ sở dữ liệu." });
   }
   
-  const { result } = req.body;
-  const { accessToken, spreadsheetId } = data;
+  // Fetch secure tokens from private quizTokens collection
+  let tokenData: any = {};
+  try {
+    const tokensSnap = await adminDb.collection("quizTokens").doc(shortId).get();
+    if (tokensSnap.exists) {
+      tokenData = tokensSnap.data() || {};
+    }
+  } catch (err) {
+    console.error("Error fetching secure tokens for submission:", err);
+  }
   
-  if (!accessToken || !spreadsheetId) {
+  const { result } = req.body;
+  let activeAccessToken = tokenData.accessToken;
+  const refreshToken = tokenData.refreshToken;
+  const spreadsheetId = tokenData.spreadsheetId;
+  
+  if (!activeAccessToken || !spreadsheetId) {
     return res.status(400).json({ error: "Bài thi này không được liên kết với Google Sheets của giáo viên." });
   }
 
-  // We write to the teacher's sheet using the teacher's cached access token
+  // 1. Luôn lưu kết quả nộp bài của học sinh vào Firestore trước làm bản sao dự phòng cực kỳ an toàn
+  const submissionId = Math.random().toString(36).substring(2, 15).toUpperCase();
+  const submissionDocRef = adminDb.collection("sharedQuizzes").doc(shortId).collection("submissions").doc(submissionId);
+  const submissionData = {
+    id: submissionId,
+    result,
+    synced: false,
+    createdAt: Date.now()
+  };
+
   try {
+    await submissionDocRef.set(submissionData);
+    console.log(`Saved backup submission ${submissionId} to Firestore.`);
+  } catch (err) {
+    console.error("Failed to save backup submission to Firestore:", err);
+  }
+
+  // Khai báo hàm thực hiện ghi dữ liệu lên Google Sheets bằng một accessToken cụ thể
+  const writeToGoogleSheets = async (token: string): Promise<boolean> => {
     const RESULT_SHEET = "Kết quả thi";
-    
-    // Construct the row summary
     const detailSummary = result.detailedGrades
       .map((g: any, idx: number) => {
         const status = g.isCorrect ? "Đúng" : "Sai";
@@ -298,13 +410,13 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
       })
       .join("\n");
 
-    // Fetch current headers from results sheet to align columns dynamically
+    // Fetch current headers to align columns dynamically
     let headers: string[] = [];
     try {
       const getHeadersRes = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}`,
         {
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: { Authorization: `Bearer ${token}` },
         }
       );
       if (getHeadersRes.ok) {
@@ -312,8 +424,11 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
         if (headerData.values && headerData.values[0] && headerData.values[0].length > 0) {
           headers = headerData.values[0];
         }
+      } else if (getHeadersRes.status === 401) {
+        throw { status: 401, message: "Unauthorized" };
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e.status === 401) throw e;
       console.error("Failed to fetch existing headers from Google Sheets on backend:", e);
     }
 
@@ -334,12 +449,12 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
         headers.push(`Câu ${i}`);
       }
       try {
-        await fetch(
+        const setHeadersRes = await fetch(
           `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A1:ZZ1")}?valueInputOption=USER_ENTERED`,
           {
             method: "PUT",
             headers: {
-              Authorization: `Bearer ${accessToken}`,
+              Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -347,7 +462,11 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
             }),
           }
         );
-      } catch (e) {
+        if (!setHeadersRes.ok && setHeadersRes.status === 401) {
+          throw { status: 401, message: "Unauthorized" };
+        }
+      } catch (e: any) {
+        if (e.status === 401) throw e;
         console.error("Failed to write backend fallback headers:", e);
       }
     }
@@ -402,52 +521,129 @@ app.post("/api/submit-quiz/:id", async (req, res) => {
       return "";
     });
 
-    const makeRequest = async () => {
-      const response = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            values: [row],
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+    const appendRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodeURIComponent(RESULT_SHEET + "!A:ZZ")}:append?valueInputOption=USER_ENTERED`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          values: [row],
+        }),
       }
-    };
+    );
 
-    // Retry up to 3 times with 1.5s interval
-    let lastError: any = null;
-    let success = false;
-    for (let i = 0; i < 3; i++) {
+    if (!appendRes.ok) {
+      if (appendRes.status === 401) {
+        throw { status: 401, message: "Unauthorized" };
+      }
+      const errorData = await appendRes.json();
+      throw new Error(errorData.error?.message || "Không thể đồng bộ kết quả thi lên Google Sheets");
+    }
+
+    return true;
+  };
+
+  // Tiến hành ghi dữ liệu
+  try {
+    let writeSuccess = false;
+    try {
+      writeSuccess = await writeToGoogleSheets(activeAccessToken);
+    } catch (writeErr: any) {
+      // 2. Nếu lỗi do Token hết hạn (401), và giáo viên có cấu hình refreshToken
+      if (writeErr.status === 401 && refreshToken) {
+        console.log("Teacher access token expired (401). Attempting to refresh token...");
+        const newAccessToken = await refreshGoogleAccessToken(refreshToken);
+        if (newAccessToken) {
+          console.log("Successfully refreshed teacher Google Access Token! Updating database...");
+          try {
+            await adminDb.collection("quizTokens").doc(shortId).update({
+              accessToken: newAccessToken
+            });
+            activeAccessToken = newAccessToken;
+          } catch (dbErr) {
+            console.error("Failed to update new access token in Firestore:", dbErr);
+          }
+
+          // Thử ghi lại một lần nữa bằng access token mới
+          console.log("Retrying sheet append with new access token...");
+          writeSuccess = await writeToGoogleSheets(newAccessToken);
+        } else {
+          console.warn("Failed to refresh Google access token. Proceeding to background sync flow.");
+          throw writeErr;
+        }
+      } else {
+        throw writeErr;
+      }
+    }
+
+    if (writeSuccess) {
+      // 3. Nếu đồng bộ thành công, cập nhật trạng thái synced: true trong Firestore
       try {
-        await makeRequest();
-        success = true;
-        break;
-      } catch (err) {
-        lastError = err;
-        if (i < 2) {
-          console.warn(`Retry ${i + 1}/3 backend append due to:`, err);
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
+        await submissionDocRef.update({ synced: true });
+      } catch (dbErr) {
+        console.error("Failed to update submission sync state:", dbErr);
       }
+      return res.json({ success: true, pendingSync: false });
+    } else {
+      throw new Error("Lưu kết quả lên Google Sheets không thành công.");
     }
 
-    if (!success) {
-      throw lastError || new Error("Không thể đồng bộ kết quả thi lên Google Sheets sau 3 lần thử.");
-    }
+  } catch (error: any) {
+    console.error("Error submitting result, moving to offline/background queue:", error);
+    // 4. Nếu có lỗi xảy ra hoặc token bị lỗi mà không thể tự làm mới,
+    // chúng ta vẫn trả về success cho học sinh để các em không lo lắng,
+    // và thông báo kết quả sẽ đồng bộ sau khi giáo viên trực tiếp mở app.
+    return res.json({ 
+      success: true, 
+      pendingSync: true, 
+      message: "Bài làm của em đã được nộp thành công lên hệ thống lưu trữ dự phòng. Kết quả sẽ tự động đồng bộ sang Google Sheets của giáo viên khi giáo viên trực tuyến." 
+    });
+  }
+});
 
+// 7. API: Get unsynced submissions for a shared quiz
+app.get("/api/get-pending-submissions/:id", async (req, res) => {
+  if (!adminDb) {
+    return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
+  }
+
+  const shortId = req.params.id.toUpperCase();
+  try {
+    const submissionsRef = adminDb.collection("sharedQuizzes").doc(shortId).collection("submissions");
+    const querySnapshot = await submissionsRef.where("synced", "==", false).get();
+    const pending: any[] = [];
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      pending.push({
+        id: doc.id,
+        result: data.result,
+        createdAt: data.createdAt
+      });
+    });
+    res.json({ success: true, submissions: pending });
+  } catch (error: any) {
+    console.error("Error fetching pending submissions:", error);
+    res.status(500).json({ error: "Không thể lấy danh sách bài nộp chưa đồng bộ." });
+  }
+});
+
+// 8. API: Mark a submission as synced
+app.post("/api/mark-submission-synced/:quizId/:submissionId", async (req, res) => {
+  if (!adminDb) {
+    return res.status(500).json({ error: "Cơ sở dữ liệu Firebase chưa được cấu hình." });
+  }
+
+  const { quizId, submissionId } = req.params;
+  try {
+    const docRef = adminDb.collection("sharedQuizzes").doc(quizId.toUpperCase()).collection("submissions").doc(submissionId.toUpperCase());
+    await docRef.update({ synced: true });
     res.json({ success: true });
   } catch (error: any) {
-    console.error("Error submitting result to sheets:", error);
-    res.status(500).json({ error: error.message || "Lỗi khi lưu kết quả." });
+    console.error("Error marking submission as synced:", error);
+    res.status(500).json({ error: "Không thể cập nhật trạng thái đồng bộ." });
   }
 });
 

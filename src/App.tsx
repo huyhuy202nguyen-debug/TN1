@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { User } from "firebase/auth";
 import { Question, Quiz, SubmissionResult, AnswerSubmission } from "./types";
-import { googleSignIn, initAuth, logout, getAccessToken as firebaseGetAccessToken } from "./lib/firebase";
+import { googleSignIn, initAuth, logout, getAccessToken as firebaseGetAccessToken, getRefreshToken as firebaseGetRefreshToken } from "./lib/firebase";
 import { fetchQuestionsFromSheet, syncAllQuestionsToSheet, appendResultToSheet } from "./lib/googleSheets";
 import LZString from "lz-string";
 
@@ -205,6 +205,10 @@ export default function App() {
     return firebaseGetAccessToken() || (window as any).__google_oauth_token || null;
   };
 
+  const getRefreshToken = (): string | null => {
+    return firebaseGetRefreshToken() || (window as any).__google_oauth_refresh_token || null;
+  };
+
   // 3. Authenticate Google Account
   const handleLogin = async () => {
     try {
@@ -232,6 +236,58 @@ export default function App() {
       console.error("Logout failed:", err);
     }
   };
+
+  // Background Sync: Auto sync any unsynced student submissions to Google Sheets when teacher is online
+  const syncPendingSubmissions = async () => {
+    const token = getAccessToken();
+    if (!token || !spreadsheetId) return;
+
+    // Filter published quizzes
+    const publishedQuizzes = quizzes.filter(q => q.publishedId);
+    if (publishedQuizzes.length === 0) return;
+
+    console.log("Checking for unsynced student submissions...");
+    for (const quiz of publishedQuizzes) {
+      try {
+        const res = await fetch(`/api/get-pending-submissions/${quiz.publishedId}`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        
+        if (data.success && data.submissions && data.submissions.length > 0) {
+          console.log(`Found ${data.submissions.length} unsynced submissions for quiz: ${quiz.title}. Syncing now...`);
+          
+          for (const sub of data.submissions) {
+            try {
+              // Call the existing appendResultToSheet function to write to the spreadsheet
+              await appendResultToSheet(token, spreadsheetId, sub.result);
+              
+              // Mark as synced on server
+              await fetch(`/api/mark-submission-synced/${quiz.publishedId}/${sub.id}`, {
+                method: "POST"
+              });
+              
+              console.log(`Synced submission ${sub.id} successfully!`);
+            } catch (syncErr) {
+              console.error(`Failed to sync submission ${sub.id}:`, syncErr);
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`Error querying pending submissions for quiz ${quiz.publishedId}:`, err);
+      }
+    }
+  };
+
+  // Trigger background sync when teacher is logged in and quizzes are loaded
+  useEffect(() => {
+    const token = getAccessToken();
+    if (user && token && spreadsheetId && quizzes.length > 0) {
+      // Run once, and then set interval to run every 2 minutes
+      syncPendingSubmissions();
+      const interval = setInterval(syncPendingSubmissions, 120000);
+      return () => clearInterval(interval);
+    }
+  }, [user, spreadsheetId, quizzes]);
 
   // 4. Save connected Sheet ID and URL
   const handleSpreadsheetConnected = (id: string, url: string) => {
@@ -607,12 +663,14 @@ export default function App() {
   const handleShareQuiz = async (quiz: Quiz) => {
     try {
       const accessToken = getAccessToken();
+      const refreshToken = getRefreshToken();
       const response = await fetch("/api/share-quiz", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           quiz,
           accessToken, // This will be null if they aren't logged in, which means results won't sync
+          refreshToken,
           spreadsheetId
         })
       });

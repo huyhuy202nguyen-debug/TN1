@@ -12,6 +12,11 @@ service cloud.firestore {
       // 3. Chỉ cho phép Giáo viên đã đăng nhập và xác thực qua hệ thống Google Auth mới có quyền tạo mới, chỉnh sửa hoặc xóa đề thi
       allow write: if request.auth != null;
     }
+
+    match /quizTokens/{quizId} {
+      // 4. Tuyệt đối KHÓA TOÀN BỘ quyền truy cập trực tiếp từ phía client đối với bảng mật chứa Token (chỉ cho phép backend Admin thao tác)
+      allow read, write: if false;
+    }
     
   }
 }
